@@ -195,7 +195,7 @@ class TestRunGitRetry:
             return mock_proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=always_locked):
-            with pytest.raises(WorktreeError, match="failed"):
+            with pytest.raises(WorktreeError, match="failed after 3 retries"):
                 await _run_git(["status"], tmp_git_repo, retries=3)
         # Should have retried before failing (3 attempts total)
         assert call_count == 3

@@ -20,7 +20,7 @@ from claude_swarm.models import SwarmResult, TaskPlan, WorkerResult, WorkerTask
 from claude_swarm.prompts import PLANNER_SYSTEM_PROMPT
 from claude_swarm.session import SessionRecorder
 from claude_swarm.util import run_agent
-from claude_swarm.worker import spawn_worker
+from claude_swarm.worker import spawn_worker_with_retry
 from claude_swarm.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,7 @@ class Orchestrator:
                     review=self.config.review,
                     task_description=self.config.task,
                     orchestrator_model=self.config.orchestrator_model,
+                    resolve_conflicts=self.config.resolve_conflicts,
                 )
 
                 if integration_success:
@@ -218,10 +219,13 @@ class Orchestrator:
                 self.session.worker_start(task.worker_id, task.title)
 
                 try:
-                    result = await spawn_worker(
+                    result = await spawn_worker_with_retry(
                         task,
                         worktree_paths[task.worker_id],
                         model=self.config.model,
+                        max_retries=self.config.max_worker_retries,
+                        escalation_model=self.config.escalation_model,
+                        enable_escalation=self.config.enable_escalation,
                         max_budget_usd=self.config.max_worker_cost,
                     )
                     # Get changed files from worktree

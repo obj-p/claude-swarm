@@ -87,6 +87,12 @@ class SessionRecorder:
         self._failure_count += 1
         self.record("worker_error", {"worker_id": worker_id, "error": error})
 
+    def worker_retry(self, worker_id: str, attempt: int, reason: str) -> None:
+        self.record("worker_retry", {"worker_id": worker_id, "attempt": attempt, "reason": reason})
+
+    def conflict_resolution(self, *, success: bool, branches: list[str], error: str | None = None) -> None:
+        self.record("conflict_resolution", {"success": success, "branches": branches, "error": error})
+
     def integration_start(self) -> None:
         self.record("integration_start")
 

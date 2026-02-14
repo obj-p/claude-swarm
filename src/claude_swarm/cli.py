@@ -32,6 +32,9 @@ def cli() -> None:
 @click.option("--dry-run", is_flag=True, help="Plan only, don't execute")
 @click.option("--review", is_flag=True, help="Run semantic review after merge")
 @click.option("--verbose", is_flag=True, help="Verbose output")
+@click.option("--retries", type=int, default=1, help="Max attempts per worker (1 = no retry)")
+@click.option("--no-escalation", is_flag=True, help="Disable model escalation on retry")
+@click.option("--no-conflict-resolution", is_flag=True, help="Disable automated merge conflict resolution")
 def run(
     task: str,
     repo: Path | None,
@@ -44,6 +47,9 @@ def run(
     dry_run: bool,
     review: bool,
     verbose: bool,
+    retries: int,
+    no_escalation: bool,
+    no_conflict_resolution: bool,
 ) -> None:
     """Run the full swarm pipeline: plan, execute, integrate, PR."""
     config = SwarmConfig(
@@ -58,6 +64,9 @@ def run(
         dry_run=dry_run,
         review=review,
         verbose=verbose,
+        max_worker_retries=retries,
+        enable_escalation=not no_escalation,
+        resolve_conflicts=not no_conflict_resolution,
     )
 
     from claude_swarm.orchestrator import Orchestrator

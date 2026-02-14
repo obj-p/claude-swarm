@@ -37,18 +37,21 @@ async def _run_git(
         if proc.returncode == 0:
             return out
 
-        if "lock" in err.lower() and attempt < retries - 1:
-            logger.debug("Git lock contention, retrying in %.1fs (attempt %d/%d)", GIT_LOCK_BACKOFF * (attempt + 1), attempt + 1, retries)
-            await asyncio.sleep(GIT_LOCK_BACKOFF * (attempt + 1))
+        if "lock" in err.lower():
+            if attempt < retries - 1:
+                logger.debug("Git lock contention, retrying in %.1fs (attempt %d/%d)", GIT_LOCK_BACKOFF * (attempt + 1), attempt + 1, retries)
+                await asyncio.sleep(GIT_LOCK_BACKOFF * (attempt + 1))
             continue
 
+        # Non-lock error — fail immediately
         if check:
             raise WorktreeError(f"git {' '.join(args)} failed: {err}")
         return out
 
+    # Only reachable if all attempts hit lock contention
     if check:
         raise WorktreeError(f"git {' '.join(args)} failed after {retries} retries (lock contention)")
-    return out
+    return ""
 
 
 class WorktreeManager:

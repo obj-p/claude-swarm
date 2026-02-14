@@ -95,3 +95,23 @@ class TestSessionRecorder:
         s.record("second")
         events = _read_events(s)
         assert events[1]["elapsed_ms"] >= events[0]["elapsed_ms"]
+
+    def test_worker_retry_event(self, tmp_path):
+        s = SessionRecorder(tmp_path, "run-1")
+        s.worker_retry("w1", attempt=2, reason="error: something broke")
+        events = _read_events(s)
+        assert len(events) == 1
+        assert events[0]["event"] == "worker_retry"
+        assert events[0]["worker_id"] == "w1"
+        assert events[0]["attempt"] == 2
+        assert events[0]["reason"] == "error: something broke"
+
+    def test_conflict_resolution_event(self, tmp_path):
+        s = SessionRecorder(tmp_path, "run-1")
+        s.conflict_resolution(success=True, branches=["branch-a", "branch-b"])
+        events = _read_events(s)
+        assert len(events) == 1
+        assert events[0]["event"] == "conflict_resolution"
+        assert events[0]["success"] is True
+        assert events[0]["branches"] == ["branch-a", "branch-b"]
+        assert events[0]["error"] is None

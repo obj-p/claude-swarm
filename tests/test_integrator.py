@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -123,6 +123,82 @@ class TestRealMerge:
             await integrate_results(
                 mgr, worker_results, "main",
                 run_id="run-1", create_pr=False,
+                resolve_conflicts=False,
             )
 
         assert len(exc_info.value.conflicting_branches) > 0
+
+
+class TestConflictResolution:
+    @pytest.mark.asyncio
+    async def test_conflict_resolution_succeeds(self, tmp_git_repo):
+        """Mock _resolve_merge_conflict returning True -> integration succeeds."""
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+
+        path1 = await mgr.create_worktree("w1", "main")
+        path2 = await mgr.create_worktree("w2", "main")
+
+        # Both modify README.md -> conflict
+        (path1 / "README.md").write_text("Worker 1 was here\n")
+        subprocess.run(["git", "add", "README.md"], cwd=path1, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w1 edit"],
+            cwd=path1, check=True, capture_output=True,
+        )
+
+        (path2 / "README.md").write_text("Worker 2 was here\n")
+        subprocess.run(["git", "add", "README.md"], cwd=path2, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w2 edit"],
+            cwd=path2, check=True, capture_output=True,
+        )
+
+        worker_results = [
+            WorkerResult(worker_id="w1", success=True, summary="done w1"),
+            WorkerResult(worker_id="w2", success=True, summary="done w2"),
+        ]
+
+        with patch("claude_swarm.integrator._resolve_merge_conflict", AsyncMock(return_value=True)):
+            success, pr_url, error = await integrate_results(
+                mgr, worker_results, "main",
+                run_id="run-1", create_pr=False,
+                resolve_conflicts=True,
+            )
+
+        assert success is True
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_conflict_resolution_fails_raises(self, tmp_git_repo):
+        """Mock _resolve_merge_conflict returning False -> MergeConflictError raised."""
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+
+        path1 = await mgr.create_worktree("w1", "main")
+        path2 = await mgr.create_worktree("w2", "main")
+
+        (path1 / "README.md").write_text("Worker 1 was here\n")
+        subprocess.run(["git", "add", "README.md"], cwd=path1, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w1 edit"],
+            cwd=path1, check=True, capture_output=True,
+        )
+
+        (path2 / "README.md").write_text("Worker 2 was here\n")
+        subprocess.run(["git", "add", "README.md"], cwd=path2, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w2 edit"],
+            cwd=path2, check=True, capture_output=True,
+        )
+
+        worker_results = [
+            WorkerResult(worker_id="w1", success=True, summary="done w1"),
+            WorkerResult(worker_id="w2", success=True, summary="done w2"),
+        ]
+
+        with patch("claude_swarm.integrator._resolve_merge_conflict", AsyncMock(return_value=False)):
+            with pytest.raises(MergeConflictError):
+                await integrate_results(
+                    mgr, worker_results, "main",
+                    run_id="run-1", create_pr=False,
+                    resolve_conflicts=True,
+                )

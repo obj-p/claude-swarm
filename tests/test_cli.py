@@ -54,3 +54,39 @@ def test_plan_sets_dry_run(runner, tmp_path):
         config = MockOrch.call_args[0][0]
         assert config.dry_run is True
         mock_instance.run.assert_called_once()
+
+
+def test_retries_option(runner, tmp_path):
+    with patch("claude_swarm.orchestrator.Orchestrator") as MockOrch:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock()
+        MockOrch.return_value = mock_instance
+
+        result = runner.invoke(cli, ["run", "test task", "--repo", str(tmp_path), "--retries", "3"])
+        assert result.exit_code == 0
+        config = MockOrch.call_args[0][0]
+        assert config.max_worker_retries == 3
+
+
+def test_no_escalation_option(runner, tmp_path):
+    with patch("claude_swarm.orchestrator.Orchestrator") as MockOrch:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock()
+        MockOrch.return_value = mock_instance
+
+        result = runner.invoke(cli, ["run", "test task", "--repo", str(tmp_path), "--no-escalation"])
+        assert result.exit_code == 0
+        config = MockOrch.call_args[0][0]
+        assert config.enable_escalation is False
+
+
+def test_no_conflict_resolution_option(runner, tmp_path):
+    with patch("claude_swarm.orchestrator.Orchestrator") as MockOrch:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock()
+        MockOrch.return_value = mock_instance
+
+        result = runner.invoke(cli, ["run", "test task", "--repo", str(tmp_path), "--no-conflict-resolution"])
+        assert result.exit_code == 0
+        config = MockOrch.call_args[0][0]
+        assert config.resolve_conflicts is False

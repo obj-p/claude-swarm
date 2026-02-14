@@ -76,6 +76,14 @@ class TestWorkerResult:
         assert r.files_changed == []
         assert r.error is None
 
+    def test_attempt_default(self):
+        r = WorkerResult(worker_id="w1", success=True)
+        assert r.attempt == 1
+
+    def test_model_used_default(self):
+        r = WorkerResult(worker_id="w1", success=True)
+        assert r.model_used is None
+
 
 class TestSwarmResult:
     def test_defaults(self):

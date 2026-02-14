@@ -11,7 +11,7 @@ from claude_agent_sdk import ClaudeAgentOptions
 
 from claude_swarm.errors import IntegrationError, MergeConflictError
 from claude_swarm.models import WorkerResult
-from claude_swarm.prompts import REVIEWER_SYSTEM_PROMPT
+from claude_swarm.prompts import CONFLICT_RESOLVER_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT
 from claude_swarm.util import run_agent
 from claude_swarm.worktree import WorktreeManager, _run_git
 
@@ -39,6 +39,7 @@ async def integrate_results(
     review: bool = False,
     task_description: str = "",
     orchestrator_model: str = "opus",
+    resolve_conflicts: bool = True,
 ) -> tuple[bool, str | None, str | None]:
     """Merge worker branches, optionally run tests and create a PR.
 
@@ -68,9 +69,20 @@ async def integrate_results(
                 )
                 merged_branches.append(branch)
             except Exception as e:
+                logger.error("Merge conflict with %s: %s", branch, e)
+
+                if resolve_conflicts:
+                    # Don't abort — leave conflict markers for the resolver
+                    resolved = await _resolve_merge_conflict(
+                        integration_path, branch, wr,
+                        orchestrator_model=orchestrator_model,
+                    )
+                    if resolved:
+                        merged_branches.append(branch)
+                        continue
+
                 # Abort the failed merge
                 await _run_git(["merge", "--abort"], integration_path, check=False)
-                logger.error("Merge conflict with %s: %s", branch, e)
 
                 # Get conflict context
                 diff_context = await _run_git(["diff", base_branch, branch], worktree_mgr.repo_path, check=False)
@@ -146,6 +158,33 @@ async def _run_semantic_review(integration_path: Path, model: str) -> None:
         prompt="Review the merged changes for semantic conflicts and fix any issues you find.",
         options=options,
     )
+
+
+async def _resolve_merge_conflict(
+    integration_path: Path,
+    branch: str,
+    worker_result: WorkerResult,
+    *,
+    orchestrator_model: str = "opus",
+) -> bool:
+    """Attempt to resolve a merge conflict using a Claude agent. Returns True on success."""
+    options = ClaudeAgentOptions(
+        system_prompt=CONFLICT_RESOLVER_SYSTEM_PROMPT,
+        model=orchestrator_model,
+        cwd=str(integration_path),
+        permission_mode="acceptEdits",
+        allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+        max_budget_usd=3.0,
+        max_turns=20,
+    )
+    prompt = f"Resolve the merge conflicts from branch {branch} (worker: {worker_result.worker_id})."
+    try:
+        result = await run_agent(prompt=prompt, options=options)
+        return not result.is_error
+    except Exception:
+        # Abort the merge so we're in a clean state
+        await _run_git(["merge", "--abort"], integration_path, check=False)
+        return False
 
 
 async def _create_pr(

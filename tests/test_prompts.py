@@ -1,8 +1,10 @@
 """Tests for system prompts."""
 
 from claude_swarm.prompts import (
+    CONFLICT_RESOLVER_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
     REVIEWER_SYSTEM_PROMPT,
+    WORKER_RETRY_CONTEXT,
     WORKER_SYSTEM_PROMPT,
 )
 
@@ -48,3 +50,15 @@ def test_reviewer_prompt_no_format_placeholders():
     import re
     placeholders = re.findall(r"\{[a-z_]+\}", REVIEWER_SYSTEM_PROMPT)
     assert placeholders == []
+
+
+def test_worker_retry_context_format():
+    result = WORKER_RETRY_CONTEXT.format(error_context="some error happened")
+    assert "some error happened" in result
+    assert "Previous Attempt Failed" in result
+
+
+def test_conflict_resolver_prompt_non_empty():
+    assert isinstance(CONFLICT_RESOLVER_SYSTEM_PROMPT, str)
+    assert len(CONFLICT_RESOLVER_SYSTEM_PROMPT) > 0
+    assert "merge conflict" in CONFLICT_RESOLVER_SYSTEM_PROMPT.lower()

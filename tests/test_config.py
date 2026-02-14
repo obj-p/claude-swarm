@@ -44,3 +44,19 @@ def test_run_id_setter():
     c = SwarmConfig()
     c.run_id = "custom-id"
     assert c.run_id == "custom-id"
+
+
+def test_retry_defaults():
+    c = SwarmConfig()
+    assert c.max_worker_retries == 1
+    assert c.escalation_model == "opus"
+    assert c.enable_escalation is True
+    assert c.resolve_conflicts is True
+
+
+def test_retry_custom_values():
+    c = SwarmConfig(max_worker_retries=3, escalation_model="sonnet", enable_escalation=False, resolve_conflicts=False)
+    assert c.max_worker_retries == 3
+    assert c.escalation_model == "sonnet"
+    assert c.enable_escalation is False
+    assert c.resolve_conflicts is False

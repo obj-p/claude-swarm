@@ -36,6 +36,8 @@ class WorkerResult(BaseModel):
     summary: str | None = None
     files_changed: list[str] = Field(default_factory=list)
     error: str | None = None
+    attempt: int = 1
+    model_used: str | None = None
 
 
 class SwarmResult(BaseModel):

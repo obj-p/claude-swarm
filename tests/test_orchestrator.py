@@ -124,7 +124,7 @@ class TestExecuteWorkers:
                 cost_usd=0.01, duration_ms=100, summary="ok",
             )
 
-        with patch("claude_swarm.orchestrator.spawn_worker", side_effect=fake_spawn):
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
             results = await orch._execute_workers(plan)
 
         assert len(results) == 2
@@ -146,7 +146,7 @@ class TestExecuteWorkers:
         async def failing_spawn(task, path, **kwargs):
             raise RuntimeError("agent crashed")
 
-        with patch("claude_swarm.orchestrator.spawn_worker", side_effect=failing_spawn):
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=failing_spawn):
             results = await orch._execute_workers(plan)
 
         assert len(results) == 1
