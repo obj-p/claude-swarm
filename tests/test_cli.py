@@ -90,3 +90,42 @@ def test_no_conflict_resolution_option(runner, tmp_path):
         assert result.exit_code == 0
         config = MockOrch.call_args[0][0]
         assert config.resolve_conflicts is False
+
+
+def test_status_command_registered(runner):
+    result = runner.invoke(cli, ["status", "--help"])
+    assert result.exit_code == 0
+    assert "state" in result.output.lower() or "status" in result.output.lower()
+
+
+def test_resume_command_registered(runner):
+    result = runner.invoke(cli, ["resume", "--help"])
+    assert result.exit_code == 0
+    assert "resume" in result.output.lower()
+
+
+def test_status_no_runs(runner, tmp_path):
+    result = runner.invoke(cli, ["status", "--repo", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No swarm runs found" in result.output
+
+
+def test_resume_no_interrupted(runner, tmp_path):
+    result = runner.invoke(cli, ["resume", "--repo", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No interrupted runs" in result.output
+
+
+def test_status_shows_run_data(runner, tmp_path):
+    from claude_swarm.config import SwarmConfig
+    from claude_swarm.state import StateManager
+
+    mgr = StateManager(tmp_path)
+    config = SwarmConfig(task="test task", repo_path=tmp_path)
+    mgr.start_run("run-abc", "test task", config)
+    mgr.register_worker("run-abc", "w1", "Add logging", "swarm/run-abc/w1")
+
+    result = runner.invoke(cli, ["status", "--repo", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "run-abc" in result.output
+    assert "test task" in result.output

@@ -16,9 +16,10 @@ from rich.text import Text
 from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError, SwarmError
 from claude_swarm.integrator import integrate_results
-from claude_swarm.models import SwarmResult, TaskPlan, WorkerResult, WorkerTask
+from claude_swarm.models import RunStatus, SwarmResult, TaskPlan, WorkerResult, WorkerStatus, WorkerTask
 from claude_swarm.prompts import PLANNER_SYSTEM_PROMPT
 from claude_swarm.session import SessionRecorder
+from claude_swarm.state import StateManager
 from claude_swarm.util import run_agent
 from claude_swarm.worker import spawn_worker_with_retry
 from claude_swarm.worktree import WorktreeManager
@@ -30,12 +31,13 @@ console = Console()
 class Orchestrator:
     """Manages the full swarm pipeline: plan, execute, integrate."""
 
-    def __init__(self, config: SwarmConfig) -> None:
+    def __init__(self, config: SwarmConfig, *, run_id: str | None = None) -> None:
         self.config = config
-        self.run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        self.run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         self.config.run_id = self.run_id
         self.worktree_mgr = WorktreeManager(config.repo_path, self.run_id)
         self.session = SessionRecorder(config.repo_path, self.run_id)
+        self.state_mgr = StateManager(config.repo_path)
 
     async def run(self) -> SwarmResult:
         """Execute the full pipeline."""
@@ -43,8 +45,12 @@ class Orchestrator:
         console.print(f"\n[bold blue]claude-swarm[/bold blue] run [dim]{self.run_id}[/dim]")
         console.print(f"[dim]Task:[/dim] {self.config.task}\n")
 
+        # Register run in persistent state
+        self.state_mgr.start_run(self.run_id, self.config.task, self.config)
+
         # Step 1: Plan
         plan = await self._plan_task()
+        self.state_mgr.set_run_plan(self.run_id, plan)
         console.print(f"\n[green]Plan ready:[/green] {len(plan.tasks)} subtask(s)")
         for t in plan.tasks:
             console.print(f"  [dim]-[/dim] {t.worker_id}: {t.title}")
@@ -56,6 +62,7 @@ class Orchestrator:
             console.print("[yellow]Dry run — stopping before execution.[/yellow]")
             console.print(f"\n[dim]Plan JSON:[/dim]")
             console.print(plan.model_dump_json(indent=2))
+            self.state_mgr.complete_run(self.run_id)
             return SwarmResult(
                 run_id=self.run_id,
                 task=self.config.task,
@@ -64,6 +71,7 @@ class Orchestrator:
             )
 
         # Step 2: Execute workers
+        self.state_mgr.set_run_status(self.run_id, RunStatus.EXECUTING)
         worker_results = await self._execute_workers(plan)
 
         # Step 3: Integrate
@@ -80,6 +88,7 @@ class Orchestrator:
 
         if successful:
             console.print(f"\n[blue]Integrating {len(successful)} successful branch(es)...[/blue]")
+            self.state_mgr.set_run_status(self.run_id, RunStatus.INTEGRATING)
             self.session.integration_start()
             base_branch = await self.worktree_mgr.get_base_branch()
 
@@ -128,6 +137,12 @@ class Orchestrator:
         self._print_summary(worker_results, total_cost, duration_ms, pr_url)
 
         self.session.write_metadata()
+
+        # Update persistent state
+        if integration_success or not successful:
+            self.state_mgr.complete_run(self.run_id, pr_url=pr_url)
+        else:
+            self.state_mgr.fail_run(self.run_id, "Integration failed")
 
         # Cleanup worktrees (keep branches for PR)
         await self.worktree_mgr.cleanup_all()
@@ -208,6 +223,10 @@ class Orchestrator:
         for task in plan.tasks:
             path = await self.worktree_mgr.create_worktree(task.worker_id, base_branch)
             worktree_paths[task.worker_id] = path
+            branch = self.worktree_mgr.get_branch_name(task.worker_id)
+            self.state_mgr.register_worker(
+                self.run_id, task.worker_id, task.title, branch,
+            )
 
         # Launch workers with rate limiting
         console.print(f"[blue]Launching {len(plan.tasks)} worker(s)...[/blue]\n")
@@ -217,6 +236,10 @@ class Orchestrator:
             await asyncio.sleep(delay)
             async with semaphore:
                 self.session.worker_start(task.worker_id, task.title)
+                self.state_mgr.update_worker(
+                    self.run_id, task.worker_id,
+                    status=WorkerStatus.RUNNING, started_at=self.state_mgr._now(),
+                )
 
                 try:
                     result = await spawn_worker_with_retry(
@@ -240,6 +263,18 @@ class Orchestrator:
                         files_changed=result.files_changed,
                         summary=result.summary,
                     )
+                    self.state_mgr.update_worker(
+                        self.run_id, task.worker_id,
+                        status=WorkerStatus.COMPLETED if result.success else WorkerStatus.FAILED,
+                        cost_usd=result.cost_usd,
+                        duration_ms=result.duration_ms,
+                        summary=result.summary,
+                        files_changed=result.files_changed,
+                        error=result.error,
+                        attempt=result.attempt,
+                        model_used=result.model_used,
+                        completed_at=self.state_mgr._now(),
+                    )
                     status = "[green]done[/green]" if result.success else "[red]failed[/red]"
                     cost_str = f" (${result.cost_usd:.2f})" if result.cost_usd is not None else ""
                     console.print(f"  {task.worker_id}: {status}{cost_str} — {task.title}")
@@ -247,6 +282,12 @@ class Orchestrator:
 
                 except Exception as e:
                     self.session.worker_error(task.worker_id, str(e))
+                    self.state_mgr.update_worker(
+                        self.run_id, task.worker_id,
+                        status=WorkerStatus.FAILED,
+                        error=str(e),
+                        completed_at=self.state_mgr._now(),
+                    )
                     console.print(f"  {task.worker_id}: [red]error[/red] — {e}")
                     return WorkerResult(
                         worker_id=task.worker_id,
@@ -310,6 +351,10 @@ class Orchestrator:
 
     async def cleanup(self) -> None:
         """Emergency cleanup (e.g., on Ctrl-C)."""
+        try:
+            self.state_mgr.set_run_status(self.run_id, RunStatus.INTERRUPTED)
+        except Exception as e:
+            logger.error("Failed to update state on interrupt: %s", e)
         try:
             await self.worktree_mgr.cleanup_all(force=True)
         except Exception as e:

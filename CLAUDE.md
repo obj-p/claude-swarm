@@ -6,14 +6,15 @@ Orchestration system for dynamic pools of Claude agents working autonomously on 
 
 ```
 src/claude_swarm/
-  cli.py          — Click CLI: run, plan, cleanup commands
+  cli.py          — Click CLI: run, plan, cleanup, status, resume commands
   config.py       — SwarmConfig dataclass (from CLI args)
   orchestrator.py — Pipeline: plan → execute → integrate
   worker.py       — Spawns Claude Code agents in worktrees
   worktree.py     — Git worktree lifecycle (create/remove/cleanup)
   integrator.py   — Merges branches, runs tests, creates PRs via gh
   session.py      — JSONL event logging + cost tracking
-  models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult
+  state.py        — Persistent state management (StateManager + Pydantic state models)
+  models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, RunStatus, WorkerStatus
   prompts.py      — System prompts for planner, worker, reviewer agents
   util.py         — run_agent() helper (consumes SDK async stream)
   errors.py       — Error hierarchy (SwarmError base)
@@ -25,6 +26,8 @@ src/claude_swarm/
 uv run swarm run "task" --repo . --workers 4 --model sonnet --no-pr
 uv run swarm plan "task" --repo .          # dry-run, plan only
 uv run swarm cleanup --repo .             # remove all worktrees + branches
+uv run swarm status --repo .              # show current/recent run state
+uv run swarm resume --repo .              # resume last interrupted run
 ```
 
 ## Key Patterns
@@ -39,6 +42,9 @@ uv run swarm cleanup --repo .             # remove all worktrees + branches
 - **Worker retry** — `spawn_worker_with_retry()` retries failed workers with error context; escalates model (Sonnet → Opus) on final attempt
 - **Conflict resolution** — on merge conflict, spawns a resolver agent to fix conflict markers before falling back to `MergeConflictError`
 - **SDK usage** — `claude_agent_sdk.query()` returns `AsyncIterator[Message]`; `run_agent()` consumes stream, returns `ResultMessage`
+- **State persistence** — `StateManager` writes `.claude-swarm/state.json` (atomic via `os.replace`); tracks run/worker lifecycle for `status` and `resume` commands
+- **State file** — `.claude-swarm/state.json` (gitignored); contains `SwarmState` with `active_run` pointer and per-run `RunState`/`WorkerState`
+- **Resumption** — `swarm resume` detects incomplete workers via `WorkerStatus`, re-executes only pending/failed workers using the saved plan
 
 ## Development
 

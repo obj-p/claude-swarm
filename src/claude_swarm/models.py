@@ -2,7 +2,29 @@
 
 from __future__ import annotations
 
+from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+class RunStatus(str, Enum):
+    """Status of an overall swarm run."""
+
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    INTEGRATING = "integrating"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+
+
+class WorkerStatus(str, Enum):
+    """Status of an individual worker within a run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 class WorkerTask(BaseModel):

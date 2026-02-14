@@ -10,8 +10,9 @@ import pytest
 
 from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError
-from claude_swarm.models import TaskPlan, WorkerResult, WorkerTask
+from claude_swarm.models import RunStatus, TaskPlan, WorkerResult, WorkerTask
 from claude_swarm.orchestrator import Orchestrator
+from claude_swarm.state import StateManager
 
 
 def _make_orchestrator(tmp_git_repo, **overrides) -> Orchestrator:
@@ -152,3 +153,53 @@ class TestExecuteWorkers:
         assert len(results) == 1
         assert results[0].success is False
         assert "agent crashed" in results[0].error
+
+
+class TestStateIntegration:
+    @pytest.mark.asyncio
+    async def test_dry_run_records_state(self, tmp_git_repo, make_result_message, sample_task_plan_dict):
+        orch = _make_orchestrator(tmp_git_repo, dry_run=True)
+        msg = make_result_message(structured_output=sample_task_plan_dict)
+        with patch("claude_swarm.orchestrator.run_agent", new_callable=AsyncMock, return_value=msg):
+            await orch.run()
+        mgr = StateManager(tmp_git_repo)
+        run = mgr.get_run(orch.run_id)
+        assert run is not None
+        assert run.status == RunStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_execute_records_worker_states(self, tmp_git_repo):
+        orch = _make_orchestrator(tmp_git_repo, max_workers=2)
+        # Must start_run first so state exists for worker registration
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id="w1", title="t1", description="d1"),
+            ],
+        )
+
+        async def fake_spawn(task, path, **kwargs):
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=0.01, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            await orch._execute_workers(plan)
+
+        mgr = StateManager(tmp_git_repo)
+        run = mgr.get_run(orch.run_id)
+        assert run is not None
+        assert "w1" in run.workers
+        assert run.workers["w1"].status.value == "completed"
+
+    @pytest.mark.asyncio
+    async def test_cleanup_marks_interrupted(self, tmp_git_repo):
+        orch = _make_orchestrator(tmp_git_repo)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        await orch.cleanup()
+        run = orch.state_mgr.get_run(orch.run_id)
+        assert run is not None
+        assert run.status == RunStatus.INTERRUPTED

@@ -186,6 +186,18 @@ class WorktreeManager:
         """Get the filesystem path of a worker's worktree."""
         return self._worktrees.get(worker_id)
 
+    async def branch_has_commits(self, branch: str, base_branch: str) -> bool:
+        """Check if a branch has commits beyond base_branch."""
+        out = await _run_git(
+            ["rev-list", "--count", f"{base_branch}..{branch}"],
+            self.repo_path,
+            check=False,
+        )
+        try:
+            return int(out.strip()) > 0
+        except ValueError:
+            return False
+
     @property
     def worker_branches(self) -> list[str]:
         """All branches created by this manager (excluding integration)."""

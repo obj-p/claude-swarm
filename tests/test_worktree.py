@@ -210,6 +210,31 @@ class TestRunGitRetry:
         assert isinstance(result, str)
 
 
+class TestBranchHasCommits:
+    @pytest.mark.asyncio
+    async def test_branch_with_commits(self, tmp_git_repo):
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+        path = await mgr.create_worktree("w1", "main")
+        # Commit a file in the worktree
+        new_file = path / "added.txt"
+        new_file.write_text("content\n")
+        subprocess.run(["git", "add", "added.txt"], cwd=path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "add file"],
+            cwd=path, check=True, capture_output=True,
+        )
+        has = await mgr.branch_has_commits("swarm/run-1/w1", "main")
+        assert has is True
+
+    @pytest.mark.asyncio
+    async def test_branch_without_commits(self, tmp_git_repo):
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+        await mgr.create_worktree("w1", "main")
+        # No commits made — branch is at same point as main
+        has = await mgr.branch_has_commits("swarm/run-1/w1", "main")
+        assert has is False
+
+
 class TestWorktreeErrorPaths:
     @pytest.mark.asyncio
     async def test_get_worktree_diff_unknown_worker(self, tmp_git_repo):
