@@ -1,6 +1,6 @@
 # Design Decisions
 
-Deep dives into each open design question from the vision document. Each section presents the problem, evaluates options, and proposes an approach.
+Deep dives into each open design question from the vision document. Each section presents the problem, evaluates options, and documents the chosen approach.
 
 ---
 
@@ -8,7 +8,7 @@ Deep dives into each open design question from the vision document. Each section
 
 **Question**: When should the orchestrator use Agent Teams (peer messaging) vs. simple subagent delegation (fire-and-forget)? Should workers be able to spawn sub-workers?
 
-### Options
+### Options Considered
 
 **A. Subagent Delegation (Default)**
 - Orchestrator spawns workers, each gets a task, they execute and return results
@@ -24,28 +24,28 @@ Deep dives into each open design question from the vision document. Each section
 
 **C. Nested Subagents (Workers spawning sub-workers)**
 - Currently blocked by Claude Code (subagents cannot spawn subagents)
-- Would enable hierarchical decomposition (orchestrator → team leads → workers)
+- Would enable hierarchical decomposition (orchestrator -> team leads -> workers)
 - Risk: coordination tax grows exponentially with depth
 
-### Proposal: Adaptive Selection
+### Decision: Adaptive Selection
 
-The orchestrator should choose the coordination mode during task decomposition based on **coupling analysis**:
+The orchestrator chooses the coordination mode during task decomposition based on **coupling analysis**:
 
 ```
 Task Decomposition
-       │
-       ▼
+       |
+       v
   Coupling Analysis
-       │
-       ├── Independent tasks ──► Subagent Delegation
-       │   (no shared files,      (fire-and-forget)
-       │    no shared state)
-       │
-       ├── Loosely coupled ────► Subagent Delegation + Shared Notes
-       │   (read same files,      (workers write to shared artifacts
-       │    write different)       directory that others can read)
-       │
-       └── Tightly coupled ────► Agent Teams
+       |
+       +-- Independent tasks --> Subagent Delegation
+       |   (no shared files,      (fire-and-forget)
+       |    no shared state)
+       |
+       +-- Loosely coupled -----> Subagent Delegation + Shared Notes
+       |   (read same files,      (workers write to shared artifacts
+       |    write different)       directory that others can read)
+       |
+       +-- Tightly coupled -----> Agent Teams
            (shared interfaces,    (full peer messaging +
             API contracts,         shared task list)
             coordinated state)
@@ -61,7 +61,7 @@ Task Decomposition
 
 **Question**: When two workers edit overlapping areas, how does the orchestrator resolve conflicts? Prevent overlap proactively or handle it reactively?
 
-### Options
+### Options Considered
 
 **A. Strict Proactive Boundaries**
 - Orchestrator assigns non-overlapping file sets to each worker
@@ -70,50 +70,62 @@ Task Decomposition
 
 **B. Reactive Merge Resolution**
 - Let workers overlap freely, handle conflicts via git merge
-- More flexible, but AI-generated merge conflicts can be messy and introduce subtle bugs
+- More flexible and faster, keeps full parallelism
+- Risk: AI-generated merge conflicts can introduce subtle bugs
 
-**C. Hybrid: Proactive Partitioning + Integration Agent**
-- Orchestrator partitions work with best-effort non-overlap
-- When overlap is unavoidable, designate one "primary" worker and one "secondary"
-- Secondary workers write proposed changes as patches/suggestions rather than direct edits
-- An integration agent (or the orchestrator itself) merges results
+**C. Hybrid: Proactive Partitioning + Sequential Fallback**
+- Best-effort non-overlap, sequential execution when files must be shared
+- Safest but slower -- sacrifices parallelism for safety
 
-### Proposal: Proactive Partitioning with Sequential Fallback
+### Decision: Overlap + Merge (Option B)
+
+**Speed-first.** Workers execute in full parallel without file boundary restrictions. When they produce overlapping changes, the orchestrator resolves conflicts via merge.
 
 ```
-Decomposition Phase
-       │
-       ▼
-  File Dependency Analysis
-       │
-       ├── No overlap ──────────► Parallel execution
-       │                           (each worker owns its files)
-       │
-       ├── Read overlap ────────► Parallel execution
-       │   (workers read same      (shared files are read-only
-       │    files, write different)  for all; each writes its own)
-       │
-       └── Write overlap ──────► Sequential execution
-           (multiple workers        (orchestrator orders the work:
-            must modify same file)   worker A goes first, worker B
-                                     gets A's output as input)
+All Workers Execute in Parallel
+       |
+       v
+  Workers Complete
+       |
+       v
+  Orchestrator Collects Branches
+       |
+       v
+  Merge Attempt
+       |
+       +-- Clean merge ---------> Done, open PR
+       |
+       +-- Git conflict --------> Spawn Integration Agent
+       |                           - Receives both diffs + conflict markers
+       |                           - Resolves conflicts with full context
+       |                           - Runs tests to verify resolution
+       |
+       +-- Semantic conflict ----> Spawn Integration Agent
+           (detected during         - Reviews all changes holistically
+            integration review)     - Fixes interface mismatches
+                                    - Ensures components wire together
 ```
 
-**Key rules:**
-1. The orchestrator performs file dependency analysis during decomposition by examining which files each subtask will likely touch
-2. Independent file sets → full parallel execution
-3. Shared read dependencies → parallel execution (reading the same file is fine)
-4. Shared write dependencies → sequential execution with explicit ordering
-5. If sequential ordering isn't possible (circular dependency), the orchestrator merges the tasks into one worker's scope
+**Why this over proactive partitioning:**
+- Features naturally cross file boundaries -- restricting file access makes workers less effective
+- Full parallelism is maintained (no sequential bottlenecks)
+- Git merge handles most overlaps cleanly without intervention
+- When conflicts do arise, an integration agent with full context resolves them better than pre-planned boundaries
 
-**Why not reactive merge?** AI-generated code that conflicts at the git level often conflicts semantically too. Two agents adding different functions to the same file might merge cleanly in git but break at runtime because they made incompatible assumptions. Proactive partitioning avoids this class of bugs entirely.
+**The integration step** (runs after all workers complete):
+1. Orchestrator attempts to merge all worker branches
+2. If git conflicts exist: spawns an integration agent with both diffs and conflict context
+3. Even if merge is clean: orchestrator does a semantic review checking for:
+   - Interface mismatches (worker A exports something differently than worker B expects)
+   - Incompatible assumptions across workers
+   - Missing connections (worker A built the API, worker B built the UI, but nobody wired them together)
+4. If semantic issues found: integration agent fixes them
+5. Runs the full test suite on the merged result
 
-**The integration step**: After all workers complete, the orchestrator reviews all changes together. It checks for:
-- Semantic conflicts (incompatible assumptions across workers)
-- Interface mismatches (worker A exports something differently than worker B expects)
-- Missing connections (worker A built the API, worker B built the UI, but nobody wired them together)
-
-If issues are found, the orchestrator spawns a focused "integration agent" to fix them.
+**Risk mitigation:**
+- The integration review step catches semantic conflicts that git merge can't detect
+- Test suite validation on the merged result provides a safety net
+- If merge resolution fails after 2 attempts, escalate to human
 
 ---
 
@@ -121,51 +133,48 @@ If issues are found, the orchestrator spawns a focused "integration agent" to fi
 
 **Question**: How do long-running tasks survive across session boundaries? Should the swarm maintain a persistent task database or rely on git/GitHub as the source of truth?
 
-### Options
+### Options Considered
 
 **A. Git + GitHub as Source of Truth**
-- Tasks → GitHub Issues (with labels for status)
-- Work-in-progress → Git branches (one per worker)
-- Results → Pull Requests
+- Tasks -> GitHub Issues (with labels for status)
+- Work-in-progress -> Git branches (one per worker)
+- Results -> Pull Requests
 - No custom infrastructure needed
-- Natural integration with existing dev workflows
 
 **B. Local State File**
-- `.claude-swarm/state.json` in the repo tracking tasks, assignments, progress
-- Fast to read/write, no network dependency
-- But: doesn't survive repo clones, can conflict with git
+- `.claude-swarm/state.json` in the repo
+- Fast but doesn't survive repo clones
 
 **C. External Database**
-- SQLite, Redis, or a hosted service for task state
 - Most flexible but adds infrastructure dependency
 - Overkill for personal tooling
 
-### Proposal: GitHub-Native State + Local Cache
+### Decision: GitHub-Native State + Local Cache
 
 Primary state lives in GitHub. Local cache accelerates reads.
 
 ```
-┌─────────────────────────────────────────────┐
-│  GitHub (Durable State)                      │
-│                                              │
-│  Issues ──► Task definitions + status        │
-│  Labels ──► Task state (swarm:active, etc.)  │
-│  Branches ► Worker progress (code changes)   │
-│  PRs ─────► Completed work ready for review  │
-│  Comments ► Agent progress updates + logs    │
-└─────────────────────────────────────────────┘
-                    ▲
-                    │ sync
-                    ▼
-┌─────────────────────────────────────────────┐
-│  Local Cache (.claude-swarm/state.json)      │
-│                                              │
-│  - Active task assignments                   │
-│  - Worker PIDs and worktree paths            │
-│  - Session IDs for resume capability         │
-│  - Token spend counters                      │
-│  - Timestamps for progress tracking          │
-└─────────────────────────────────────────────┘
++---------------------------------------------+
+|  GitHub (Durable State)                      |
+|                                              |
+|  Issues --> Task definitions + status        |
+|  Labels --> Task state (swarm:active, etc.)  |
+|  Branches > Worker progress (code changes)   |
+|  PRs -----> Completed work ready for review  |
+|  Comments > Agent progress updates + logs    |
++---------------------------------------------+
+                    ^
+                    | sync
+                    v
++---------------------------------------------+
+|  Local Cache (.claude-swarm/state.json)      |
+|                                              |
+|  - Active task assignments                   |
+|  - Worker PIDs and worktree paths            |
+|  - Session IDs for resume capability         |
+|  - Token spend counters                      |
+|  - Timestamps for progress tracking          |
++---------------------------------------------+
 ```
 
 **Resumption workflow:**
@@ -210,38 +219,38 @@ Add JWT-based authentication to the API...
 
 **Question**: What does monitoring look like? How do you inspect agents in real-time? How do you measure cost?
 
-### Proposal: Three Observation Channels
+### Decision: Three Observation Channels
 
 #### Channel 1: Terminal (Real-Time)
 For active monitoring while the swarm runs.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ claude-swarm: Implement user authentication               │
-│ Status: RUNNING | Workers: 3/3 active | Tokens: 142.3k   │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌─ Worker 1 (auth-middleware) ──────────────────────┐   │
-│  │ Status: Writing code                              │   │
-│  │ Files: src/middleware/auth.ts, src/types/auth.ts   │   │
-│  │ Tokens: 48.2k | Elapsed: 2m 14s                   │   │
-│  └───────────────────────────────────────────────────┘   │
-│                                                          │
-│  ┌─ Worker 2 (auth-endpoints) ──────────────────────┐   │
-│  │ Status: Running tests                             │   │
-│  │ Files: src/routes/auth.ts, src/controllers/auth.ts│   │
-│  │ Tokens: 52.1k | Elapsed: 2m 31s                   │   │
-│  └───────────────────────────────────────────────────┘   │
-│                                                          │
-│  ┌─ Worker 3 (auth-tests) ──────────────────────────┐   │
-│  │ Status: Waiting (blocked by workers 1,2)          │   │
-│  │ Tokens: 0 | Elapsed: --                           │   │
-│  └───────────────────────────────────────────────────┘   │
-│                                                          │
-│  [q]uit  [p]ause  [d]etail <worker#>  [l]ogs            │
-├──────────────────────────────────────────────────────────┤
-│ Log: Worker-2 running `npm test` ... 14 passed, 0 failed │
-└──────────────────────────────────────────────────────────┘
++----------------------------------------------------------+
+| claude-swarm: Implement user authentication               |
+| Status: RUNNING | Workers: 3/3 active | Tokens: 142.3k   |
++----------------------------------------------------------+
+|                                                          |
+|  +- Worker 1 (auth-middleware) ----------------------+   |
+|  | Status: Writing code                              |   |
+|  | Files: src/middleware/auth.ts, src/types/auth.ts   |   |
+|  | Tokens: 48.2k | Elapsed: 2m 14s                   |   |
+|  +---------------------------------------------------+   |
+|                                                          |
+|  +- Worker 2 (auth-endpoints) -----------------------+   |
+|  | Status: Running tests                             |   |
+|  | Files: src/routes/auth.ts, src/controllers/auth.ts|   |
+|  | Tokens: 52.1k | Elapsed: 2m 31s                   |   |
+|  +---------------------------------------------------+   |
+|                                                          |
+|  +- Worker 3 (auth-tests) ---------------------------+   |
+|  | Status: Waiting (blocked by workers 1,2)          |   |
+|  | Tokens: 0 | Elapsed: --                           |   |
+|  +---------------------------------------------------+   |
+|                                                          |
+|  [q]uit  [p]ause  [d]etail <worker#>  [l]ogs            |
++----------------------------------------------------------+
+| Log: Worker-2 running `npm test` ... 14 passed, 0 failed |
++----------------------------------------------------------+
 ```
 
 Implementation: tmux session managed by the orchestrator. Each worker runs in a pane. The orchestrator renders a status header. This builds on Agent Teams' existing tmux integration.
@@ -311,39 +320,38 @@ The cost report surfaces:
 | **Destructive** | Corrupted worktree, deleted files | High - needs cleanup |
 | **Systemic** | All workers hitting same issue | High - needs human escalation |
 
-### Proposal: Tiered Recovery Strategy
+### Decision: Tiered Recovery Strategy
 
 ```
 Worker Failure
-       │
-       ▼
+       |
+       v
   Classify Failure
-       │
-       ├── Transient ──────────► Auto-retry (max 3x with backoff)
-       │   (rate limit,
-       │    network error)
-       │
-       ├── Task Failure ───────► Retry with Error Context
-       │   (tests fail,           - Feed error output back to worker
-       │    build breaks)          - "Tests failed with: <output>. Fix the issue."
-       │                           - Max 2 retries, then escalate
-       │
-       ├── Bad Output ─────────► Evaluator-Optimizer Loop
-       │   (code works but         - Spawn a review agent to evaluate
-       │    wrong approach)         - Feed review back to worker
-       │                           - If still wrong after 1 cycle, escalate
-       │
-       ├── Agent Confusion ────► Fresh Start
-       │   (off-task,              - Kill the worker
-       │    infinite loop)          - Spawn new worker with same task
-       │                           - Add explicit constraints to prevent repeat
-       │
-       ├── Destructive ────────► Cleanup + Fresh Start
-       │   (corrupted state)       - Delete worktree
-       │                           - Create new worktree from clean branch
-       │                           - Spawn new worker
-       │
-       └── Systemic ──────────► Escalate to Human
+       |
+       +-- Transient -----------> Auto-retry (max 3x with backoff)
+       |   (rate limit,
+       |    network error)
+       |
+       +-- Task Failure --------> Retry with Error Context
+       |   (tests fail,           - Feed error output back to worker
+       |    build breaks)          - "Tests failed with: <output>. Fix the issue."
+       |                           - Max 2 retries, then escalate model
+       |
+       +-- Model Escalation ----> Retry with Opus
+       |   (Sonnet failed 2x)     - Same task, stronger model
+       |                           - If Opus also fails, escalate to human
+       |
+       +-- Agent Confusion -----> Fresh Start
+       |   (off-task,              - Kill the worker
+       |    infinite loop)          - Spawn new worker with same task
+       |                           - Add explicit constraints to prevent repeat
+       |
+       +-- Destructive ---------> Cleanup + Fresh Start
+       |   (corrupted state)       - Delete worktree
+       |                           - Create new worktree from clean branch
+       |                           - Spawn new worker
+       |
+       +-- Systemic ------------> Escalate to Human
            (multiple workers       - Pause all workers
             hitting same issue)    - Post summary to GitHub issue
                                    - Notify human (terminal + optional webhook)
@@ -363,8 +371,11 @@ Worker Failure
 - If no meaningful progress (no new file edits, no test runs) for 3 minutes, the worker is considered confused
 - Grace period can be extended for tasks known to require long build/test cycles
 
-**Cost circuit breaker:**
-- If a single worker exceeds a configurable token budget (e.g., 500k tokens), it's killed
+**Cost circuit breaker (enabled by default, generous limits):**
+- Per-worker token budget: 500k tokens (configurable)
+- Per-task total budget: 2M tokens (configurable)
+- Per-session budget: 10M tokens (configurable)
+- When any budget is hit: worker is paused, orchestrator notified, human alerted
 - Prevents runaway loops from burning unlimited tokens
 - Budget scales with task complexity (the orchestrator sets it during assignment)
 
@@ -374,40 +385,40 @@ Worker Failure
 
 **Question**: Should workers always use the same model, or should the orchestrator pick models based on task complexity?
 
-### Proposal: Orchestrator-Driven Adaptive Selection
+### Decision: Sonnet Floor with Opus Escalation
 
-Given the speed-first priority, the default should be **capable models that minimize rework**, not cheap models that might fail and need retries.
+Given the speed-first priority, the default is **capable models that minimize rework**, not cheap models that might fail and need retries.
 
 ```
 Task Complexity Assessment
-       │
-       ▼
-  ┌─────────────────────────────────────────────────┐
-  │  Orchestrator (always Opus)                      │
-  │  Needs the best reasoning for:                   │
-  │  - Task decomposition                            │
-  │  - Coupling analysis                             │
-  │  - Integration review                            │
-  │  - Error recovery decisions                      │
-  └─────────────────────────────────────────────────┘
-       │
-       │ assigns model per worker
-       │
-       ├── Complex tasks ──────► Opus
-       │   - Architectural changes
-       │   - Cross-service refactoring
-       │   - Security-critical code
-       │   - Novel algorithms / complex logic
-       │   - Tasks that failed with Sonnet
-       │
-       ├── Standard tasks ─────► Sonnet (default)
-       │   - Feature implementation
-       │   - Bug fixes with known root cause
-       │   - Writing tests
-       │   - Code review
-       │   - API endpoint implementation
-       │
-       └── Simple tasks ──────► Sonnet (not Haiku)
+       |
+       v
+  +-----------------------------------------------------+
+  |  Orchestrator (always Opus)                          |
+  |  Needs the best reasoning for:                       |
+  |  - Task decomposition                                |
+  |  - Coupling analysis                                  |
+  |  - Integration review                                |
+  |  - Error recovery decisions                          |
+  +-----------------------------------------------------+
+       |
+       | assigns model per worker
+       |
+       +-- Complex tasks -------> Opus
+       |   - Architectural changes
+       |   - Cross-service refactoring
+       |   - Security-critical code
+       |   - Novel algorithms / complex logic
+       |   - Tasks that failed with Sonnet
+       |
+       +-- Standard tasks ------> Sonnet (default)
+       |   - Feature implementation
+       |   - Bug fixes with known root cause
+       |   - Writing tests
+       |   - Code review
+       |   - API endpoint implementation
+       |
+       +-- Simple tasks --------> Sonnet (not Haiku)
            - Config changes        Speed-first means we'd
            - Dependency updates    rather overshoot on
            - Formatting fixes      capability than risk
@@ -447,7 +458,7 @@ Task Complexity Assessment
 | Install malicious packages | Medium - supply chain | PreToolUse hooks + allowlists |
 | Agent prompt injection via repo content | Low-Medium - misdirection | Sandboxed execution, review step |
 
-### Proposal: Defense in Depth
+### Decision: Defense in Depth
 
 #### Layer 1: Worktree Isolation (Structural)
 - Workers NEVER operate on the main branch directly
@@ -502,10 +513,10 @@ The `claude-swarm-guard` script blocks:
 Secrets NEVER enter worker context directly.
 
 Instead:
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Worker      │────►│  MCP Server   │────►│  External     │
-│  (no secrets) │     │  (has creds)  │     │  Service      │
-└──────────────┘     └──────────────┘     └──────────────┘
++--------------+     +--------------+     +--------------+
+|   Worker      |---->|  MCP Server   |---->|  External     |
+|  (no secrets) |     |  (has creds)  |     |  Service      |
++--------------+     +--------------+     +--------------+
 
 Workers call tools ("create PR", "query database")
 MCP servers handle authentication internally
@@ -516,11 +527,14 @@ Workers never see API keys, tokens, or passwords
 - `.env` files are in `.gitignore` and excluded from worker file access via hooks
 - If a worker somehow writes a secret to a file, a PostToolUse hook runs `git-secrets --scan` and blocks the commit
 
-#### Layer 6: Review Gate (Human)
-- Even in "fully autonomous" mode, all changes go through PRs
+#### Layer 6: Review Gate (Configurable per-task)
+- All changes go through PRs
 - PRs trigger CI/CD (tests, linting, security scans)
-- The orchestrator cannot merge PRs -- only humans can (configurable)
-- For checkpoint-based oversight: orchestrator posts "@user: approval needed for X" on the issue
+- **Merge rights are configurable per-task:**
+  - `oversight: autonomous` -- auto-merge if CI passes (for low-risk tasks like tests, formatting, deps)
+  - `oversight: pr-gated` -- PR created but human must merge (default)
+  - `oversight: checkpoint` -- orchestrator pauses at key decisions and posts "@user: approval needed for X"
+- Auto-merge criteria (when enabled): all CI checks pass, no security scan warnings, changes are within expected scope
 
 ### Escape Hatches
 Sometimes you legitimately need to do something the guard blocks. Options:
@@ -535,9 +549,11 @@ Sometimes you legitimately need to do something the guard blocks. Options:
 | Question | Decision | Rationale |
 |----------|----------|-----------|
 | Coordination | Adaptive: subagent delegation by default, Agent Teams for coupled tasks | Minimize coordination tax; escalate only when needed |
-| Conflict Resolution | Proactive partitioning with sequential fallback for shared files | Prevent semantic conflicts; avoid AI merge complexity |
+| Conflict Resolution | **Overlap + merge**: full parallel execution, integration agent resolves conflicts after | Speed-first: maximize parallelism, handle conflicts reactively |
 | State Persistence | GitHub-native (issues + branches + PRs) with local cache | No new infrastructure; human-readable; survives crashes |
 | Observability | Three channels: terminal (real-time), GitHub (async), local logs (debug) | Different needs at different times |
-| Error Recovery | Tiered: auto-retry → error context → model escalation → human | Exhaust automated options before bothering the human |
+| Error Recovery | Tiered: auto-retry -> error context -> model escalation -> human | Exhaust automated options before bothering the human |
 | Model Selection | Opus orchestrator, Sonnet default workers, Opus for complex/failed tasks | Speed-first: overshoot capability to minimize rework |
 | Security | Defense in depth: worktree isolation + hooks + MCP permissions + cost limits + secrets management | Multiple independent layers; no single point of failure |
+| Merge Rights | **Configurable per-task**: auto-merge for low-risk, human-merge for default, checkpoints for high-risk | Matches configurable oversight philosophy |
+| Cost Limits | **Enabled with generous defaults**: 500k/worker, 2M/task, 10M/session | Prevents runaways without being restrictive |
