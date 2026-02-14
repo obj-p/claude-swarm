@@ -35,7 +35,7 @@ async def integrate_results(
     run_id: str,
     test_command: str | None = None,
     build_command: str | None = None,
-    create_pr: bool = True,
+    should_create_pr: bool = True,
     review: bool = False,
     task_description: str = "",
     orchestrator_model: str = "opus",
@@ -49,7 +49,7 @@ async def integrate_results(
     if not successful_workers:
         raise IntegrationError("No successful workers to integrate")
 
-    if create_pr:
+    if should_create_pr:
         _check_gh_installed()
 
     # Create integration worktree
@@ -111,8 +111,8 @@ async def integrate_results(
 
         # Create PR
         pr_url: str | None = None
-        if create_pr:
-            pr_url = await _create_pr(
+        if should_create_pr:
+            pr_url = await create_pr(
                 integration_path,
                 integration_branch,
                 base_branch,
@@ -187,7 +187,7 @@ async def _resolve_merge_conflict(
         return False
 
 
-async def _create_pr(
+async def create_pr(
     integration_path: Path,
     integration_branch: str,
     base_branch: str,
@@ -238,3 +238,27 @@ async def _create_pr(
 
     pr_url = stdout.decode().strip()
     return pr_url
+
+
+async def auto_merge_pr(pr_url: str, cwd: Path) -> bool:
+    """Enable auto-merge on a PR via gh. Returns True on success.
+
+    Uses ``gh pr merge --auto --squash`` so the PR is only merged after
+    required status checks pass.  Does NOT fall back to a direct merge
+    to avoid bypassing CI protections.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        "gh", "pr", "merge", pr_url, "--auto", "--squash",
+        cwd=str(cwd),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await proc.communicate()
+    if proc.returncode == 0:
+        return True
+    logger.warning(
+        "Auto-merge failed for %s — ensure auto-merge is enabled on the repository. "
+        "PR remains open for manual merge.",
+        pr_url,
+    )
+    return False

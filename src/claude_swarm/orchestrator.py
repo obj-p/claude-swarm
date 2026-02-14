@@ -39,6 +39,30 @@ class Orchestrator:
         self.session = SessionRecorder(config.repo_path, self.run_id)
         self.state_mgr = StateManager(config.repo_path)
 
+    async def _checkpoint(self, message: str, context: str = "", resume_status: RunStatus = RunStatus.EXECUTING) -> bool:
+        """Prompt user for confirmation. Returns True if approved.
+
+        No-op (returns True) for non-checkpoint modes.
+        On approval, restores status to *resume_status* so a crash between
+        checkpoint and the next explicit status change leaves the run resumable.
+        """
+        if self.config.oversight != "checkpoint":
+            return True
+        self.state_mgr.set_run_status(self.run_id, RunStatus.PAUSED_CHECKPOINT)
+        console.print(f"\n[bold yellow]CHECKPOINT[/bold yellow]")
+        if context:
+            console.print(context)
+        console.print(f"[yellow]{message}[/yellow]")
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(None, lambda: input("Proceed? [Y/n] "))
+        approved = response.strip().lower() in ("y", "yes", "")
+        if approved:
+            self.state_mgr.set_run_status(self.run_id, resume_status)
+        else:
+            console.print("[red]Declined. Marking run as interrupted.[/red]")
+            self.state_mgr.set_run_status(self.run_id, RunStatus.INTERRUPTED)
+        return approved
+
     async def run(self) -> SwarmResult:
         """Execute the full pipeline."""
         start = time.monotonic()
@@ -70,6 +94,20 @@ class Orchestrator:
                 duration_ms=int((time.monotonic() - start) * 1000),
             )
 
+        # Checkpoint 1: after planning, before execution
+        task_list = "\n".join(f"  - {t.worker_id}: {t.title}" for t in plan.tasks)
+        if not await self._checkpoint(
+            f"Execute {len(plan.tasks)} worker(s)?",
+            context=task_list,
+        ):
+            self.state_mgr.complete_run(self.run_id)
+            return SwarmResult(
+                run_id=self.run_id,
+                task=self.config.task,
+                plan=plan,
+                duration_ms=int((time.monotonic() - start) * 1000),
+            )
+
         # Step 2: Execute workers
         self.state_mgr.set_run_status(self.run_id, RunStatus.EXECUTING)
         worker_results = await self._execute_workers(plan)
@@ -87,10 +125,32 @@ class Orchestrator:
         integration_success = False
 
         if successful:
+            # Checkpoint 2: after workers, before integration
+            worker_summary = "\n".join(
+                f"  - {r.worker_id}: {r.summary or 'completed'}" for r in successful
+            )
+            if not await self._checkpoint(
+                f"Integrate {len(successful)} successful branch(es)?",
+                context=worker_summary,
+                resume_status=RunStatus.INTEGRATING,
+            ):
+                await self.worktree_mgr.cleanup_all()
+                return SwarmResult(
+                    run_id=self.run_id,
+                    task=self.config.task,
+                    plan=plan,
+                    worker_results=worker_results,
+                    duration_ms=int((time.monotonic() - start) * 1000),
+                )
+
             console.print(f"\n[blue]Integrating {len(successful)} successful branch(es)...[/blue]")
             self.state_mgr.set_run_status(self.run_id, RunStatus.INTEGRATING)
             self.session.integration_start()
             base_branch = await self.worktree_mgr.get_base_branch()
+
+            # In checkpoint mode, defer PR creation to after the checkpoint
+            should_create_pr = self.config.create_pr
+            create_pr_now = should_create_pr and self.config.oversight != "checkpoint"
 
             try:
                 integration_success, pr_url, error_msg = await integrate_results(
@@ -100,7 +160,7 @@ class Orchestrator:
                     run_id=self.run_id,
                     test_command=plan.test_command,
                     build_command=plan.build_command,
-                    create_pr=self.config.create_pr,
+                    should_create_pr=create_pr_now,
                     review=self.config.review,
                     task_description=self.config.task,
                     orchestrator_model=self.config.orchestrator_model,
@@ -112,9 +172,36 @@ class Orchestrator:
                         success=True,
                         branches=[self.worktree_mgr.get_branch_name(r.worker_id) for r in successful],
                     )
+
+                    # Checkpoint 3: after integration, before PR (checkpoint mode only)
+                    if should_create_pr and self.config.oversight == "checkpoint":
+                        if await self._checkpoint("Create PR?", resume_status=RunStatus.INTEGRATING):
+                            from claude_swarm.integrator import create_pr as do_create_pr
+                            integration_branch = self.worktree_mgr.get_branch_name("integration")
+                            integration_path = self.worktree_mgr.get_worktree_path("integration")
+                            if integration_path is None:
+                                raise SwarmError("Integration worktree not found")
+                            pr_url = await do_create_pr(
+                                integration_path,
+                                integration_branch,
+                                base_branch,
+                                run_id=self.run_id,
+                                task_description=self.config.task,
+                                worker_results=successful,
+                            )
+
                     if pr_url:
                         self.session.pr_created(pr_url)
                         console.print(f"\n[green bold]PR created:[/green bold] {pr_url}")
+
+                        # Autonomous mode: auto-merge
+                        if self.config.oversight == "autonomous":
+                            from claude_swarm.integrator import auto_merge_pr
+                            merged = await auto_merge_pr(pr_url, self.config.repo_path)
+                            if merged:
+                                console.print(f"[green bold]PR auto-merged:[/green bold] {pr_url}")
+                            else:
+                                console.print(f"[yellow]Auto-merge failed. PR remains open:[/yellow] {pr_url}")
                     else:
                         console.print("\n[green]Integration successful.[/green]")
                 else:

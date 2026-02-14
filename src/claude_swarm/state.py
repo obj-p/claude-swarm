@@ -149,6 +149,7 @@ class StateManager:
                 "escalation_model": config.escalation_model,
                 "enable_escalation": config.enable_escalation,
                 "resolve_conflicts": config.resolve_conflicts,
+                "oversight": config.oversight,
             },
         )
 

@@ -14,7 +14,7 @@ src/claude_swarm/
   integrator.py   — Merges branches, runs tests, creates PRs via gh
   session.py      — JSONL event logging + cost tracking
   state.py        — Persistent state management (StateManager + Pydantic state models)
-  models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, RunStatus, WorkerStatus
+  models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, RunStatus, WorkerStatus, OversightLevel
   prompts.py      — System prompts for planner, worker, reviewer agents
   util.py         — run_agent() helper (consumes SDK async stream)
   errors.py       — Error hierarchy (SwarmError base)
@@ -24,6 +24,8 @@ src/claude_swarm/
 
 ```bash
 uv run swarm run "task" --repo . --workers 4 --model sonnet --no-pr
+uv run swarm run "task" --repo . --oversight autonomous   # auto-merge PR if CI passes
+uv run swarm run "task" --repo . --oversight checkpoint   # pause at key decisions
 uv run swarm plan "task" --repo .          # dry-run, plan only
 uv run swarm cleanup --repo .             # remove all worktrees + branches
 uv run swarm status --repo .              # show current/recent run state
@@ -45,6 +47,7 @@ uv run swarm resume --repo .              # resume last interrupted run
 - **State persistence** — `StateManager` writes `.claude-swarm/state.json` (atomic via `os.replace`); tracks run/worker lifecycle for `status` and `resume` commands
 - **State file** — `.claude-swarm/state.json` (gitignored); contains `SwarmState` with `active_run` pointer and per-run `RunState`/`WorkerState`
 - **Resumption** — `swarm resume` detects incomplete workers via `WorkerStatus`, re-executes only pending/failed workers using the saved plan
+- **Oversight levels** — `--oversight autonomous|pr-gated|checkpoint`; autonomous auto-merges via `gh pr merge --auto --squash`; checkpoint pauses at 3 decision points (execute workers, integrate, create PR) with terminal confirmation; pr-gated (default) creates PR for human merge
 
 ## Development
 

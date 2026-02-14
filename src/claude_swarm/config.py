@@ -26,6 +26,7 @@ class SwarmConfig:
     escalation_model: str = "opus"
     enable_escalation: bool = True
     resolve_conflicts: bool = True
+    oversight: str = "pr-gated"
 
     def __post_init__(self) -> None:
         self.repo_path = Path(self.repo_path).resolve()

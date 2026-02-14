@@ -116,6 +116,18 @@ def test_resume_no_interrupted(runner, tmp_path):
     assert "No interrupted runs" in result.output
 
 
+def test_oversight_default_is_pr_gated(runner, tmp_path):
+    with patch("claude_swarm.orchestrator.Orchestrator") as MockOrch:
+        mock_instance = MagicMock()
+        mock_instance.run = AsyncMock()
+        MockOrch.return_value = mock_instance
+
+        result = runner.invoke(cli, ["run", "test task", "--repo", str(tmp_path)])
+        assert result.exit_code == 0
+        config = MockOrch.call_args[0][0]
+        assert config.oversight == "pr-gated"
+
+
 def test_status_shows_run_data(runner, tmp_path):
     from claude_swarm.config import SwarmConfig
     from claude_swarm.state import StateManager

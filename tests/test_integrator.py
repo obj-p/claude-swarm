@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from claude_swarm.errors import IntegrationError, MergeConflictError
-from claude_swarm.integrator import _check_gh_installed, _run_command, integrate_results
+from claude_swarm.integrator import _check_gh_installed, _run_command, create_pr, integrate_results
 from claude_swarm.models import WorkerResult
 from claude_swarm.worktree import WorktreeManager
 
@@ -42,7 +42,7 @@ class TestIntegrateNoWorkers:
         with pytest.raises(IntegrationError, match="No successful workers"):
             await integrate_results(
                 mgr, failed, "main",
-                run_id="run-1", create_pr=False,
+                run_id="run-1", should_create_pr=False,
             )
 
 
@@ -79,7 +79,7 @@ class TestRealMerge:
 
         success, pr_url, error = await integrate_results(
             mgr, worker_results, "main",
-            run_id="run-1", create_pr=False,
+            run_id="run-1", should_create_pr=False,
         )
 
         assert success is True
@@ -122,7 +122,7 @@ class TestRealMerge:
         with pytest.raises(MergeConflictError) as exc_info:
             await integrate_results(
                 mgr, worker_results, "main",
-                run_id="run-1", create_pr=False,
+                run_id="run-1", should_create_pr=False,
                 resolve_conflicts=False,
             )
 
@@ -161,7 +161,7 @@ class TestConflictResolution:
         with patch("claude_swarm.integrator._resolve_merge_conflict", AsyncMock(return_value=True)):
             success, pr_url, error = await integrate_results(
                 mgr, worker_results, "main",
-                run_id="run-1", create_pr=False,
+                run_id="run-1", should_create_pr=False,
                 resolve_conflicts=True,
             )
 
@@ -199,6 +199,12 @@ class TestConflictResolution:
             with pytest.raises(MergeConflictError):
                 await integrate_results(
                     mgr, worker_results, "main",
-                    run_id="run-1", create_pr=False,
+                    run_id="run-1", should_create_pr=False,
                     resolve_conflicts=True,
                 )
+
+
+class TestCreatePrPublic:
+    def test_create_pr_is_importable(self):
+        """Verify create_pr is a public callable (renamed from _create_pr)."""
+        assert callable(create_pr)

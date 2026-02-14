@@ -7,6 +7,14 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
+class OversightLevel(str, Enum):
+    """How much human oversight a swarm run requires."""
+
+    AUTONOMOUS = "autonomous"
+    PR_GATED = "pr-gated"
+    CHECKPOINT = "checkpoint"
+
+
 class RunStatus(str, Enum):
     """Status of an overall swarm run."""
 
@@ -16,6 +24,7 @@ class RunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    PAUSED_CHECKPOINT = "paused_checkpoint"
 
 
 class WorkerStatus(str, Enum):

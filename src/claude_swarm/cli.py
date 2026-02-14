@@ -35,6 +35,12 @@ def cli() -> None:
 @click.option("--retries", type=int, default=1, help="Max attempts per worker (1 = no retry)")
 @click.option("--no-escalation", is_flag=True, help="Disable model escalation on retry")
 @click.option("--no-conflict-resolution", is_flag=True, help="Disable automated merge conflict resolution")
+@click.option(
+    "--oversight",
+    type=click.Choice(["autonomous", "pr-gated", "checkpoint"], case_sensitive=False),
+    default="pr-gated",
+    help="Oversight level: autonomous (auto-merge), pr-gated (default), checkpoint (pause for approval)",
+)
 def run(
     task: str,
     repo: Path | None,
@@ -50,8 +56,12 @@ def run(
     retries: int,
     no_escalation: bool,
     no_conflict_resolution: bool,
+    oversight: str,
 ) -> None:
     """Run the full swarm pipeline: plan, execute, integrate, PR."""
+    if oversight == "autonomous" and not pr:
+        raise click.UsageError("--oversight=autonomous requires PR creation (incompatible with --no-pr)")
+
     config = SwarmConfig(
         task=task,
         repo_path=repo or Path.cwd(),
@@ -67,6 +77,7 @@ def run(
         max_worker_retries=retries,
         enable_escalation=not no_escalation,
         resolve_conflicts=not no_conflict_resolution,
+        oversight=oversight,
     )
 
     from claude_swarm.orchestrator import Orchestrator
@@ -166,6 +177,7 @@ def status(repo: Path | None) -> None:
         "completed": "green",
         "failed": "red",
         "interrupted": "yellow",
+        "paused_checkpoint": "yellow",
     }
     style = status_styles.get(run.status.value, "white")
     console.print(f"[dim]Status:[/dim]  [{style}]{run.status.value}[/{style}]")
@@ -226,7 +238,7 @@ def resume(repo: Path | None, run_id: str | None) -> None:
             console.print("[dim]No interrupted runs to resume.[/dim]")
             return
 
-    if run.status not in (RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.EXECUTING):
+    if run.status not in (RunStatus.INTERRUPTED, RunStatus.FAILED, RunStatus.EXECUTING, RunStatus.PAUSED_CHECKPOINT):
         console.print(f"[yellow]Run {run.run_id} is {run.status.value}, cannot resume.[/yellow]")
         return
 
@@ -270,6 +282,7 @@ def resume(repo: Path | None, run_id: str | None) -> None:
         escalation_model=run.config_snapshot.get("escalation_model", "opus"),
         enable_escalation=run.config_snapshot.get("enable_escalation", True),
         resolve_conflicts=run.config_snapshot.get("resolve_conflicts", True),
+        oversight=run.config_snapshot.get("oversight", "pr-gated"),
     )
     config.run_id = run.run_id
 
@@ -324,7 +337,7 @@ def resume(repo: Path | None, run_id: str | None) -> None:
                     run_id=run.run_id,
                     test_command=run.plan.test_command,
                     build_command=run.plan.build_command,
-                    create_pr=True,
+                    should_create_pr=True,
                     review=False,
                     task_description=run.task,
                     orchestrator_model=config.orchestrator_model,
