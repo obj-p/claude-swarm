@@ -9,6 +9,7 @@ import pytest
 
 from claude_swarm.errors import WorkerError
 from claude_swarm.models import WorkerTask
+from claude_swarm.prompts import WORKER_NOTES_SECTION
 from claude_swarm.worker import spawn_worker
 
 
@@ -57,3 +58,34 @@ class TestSpawnWorker:
             # Check the options passed to run_agent
             options = mock_run.call_args.kwargs["options"]
             assert "Fix the bug" in options.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_notes_dir_in_system_prompt(self, make_result_message, tmp_path):
+        msg = make_result_message()
+        notes_dir = tmp_path / "notes"
+        notes_dir.mkdir()
+        with patch("claude_swarm.worker.run_agent", new_callable=AsyncMock, return_value=msg) as mock_run:
+            await spawn_worker(_make_task(), tmp_path, notes_dir=notes_dir)
+            options = mock_run.call_args.kwargs["options"]
+            assert "Shared Notes" in options.system_prompt
+            assert str(notes_dir) in options.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_no_notes_dir_no_notes_section(self, make_result_message, tmp_path):
+        msg = make_result_message()
+        with patch("claude_swarm.worker.run_agent", new_callable=AsyncMock, return_value=msg) as mock_run:
+            await spawn_worker(_make_task(), tmp_path)
+            options = mock_run.call_args.kwargs["options"]
+            assert "Shared Notes" not in options.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_coordination_notes_in_system_prompt(self, make_result_message, tmp_path):
+        msg = make_result_message()
+        notes_dir = tmp_path / "notes"
+        notes_dir.mkdir()
+        task = _make_task(coordination_notes="Write a note about the API schema")
+        with patch("claude_swarm.worker.run_agent", new_callable=AsyncMock, return_value=msg) as mock_run:
+            await spawn_worker(task, tmp_path, notes_dir=notes_dir)
+            options = mock_run.call_args.kwargs["options"]
+            assert "Coordination Instructions" in options.system_prompt
+            assert "Write a note about the API schema" in options.system_prompt

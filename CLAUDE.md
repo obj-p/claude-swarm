@@ -15,6 +15,7 @@ src/claude_swarm/
   session.py      — JSONL event logging + cost tracking
   state.py        — Persistent state management (StateManager + Pydantic state models)
   models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, RunStatus, WorkerStatus, OversightLevel
+  notes.py        — Shared notes for inter-worker coordination (NoteManager + SharedNote model)
   prompts.py      — System prompts for planner, worker, reviewer agents
   util.py         — run_agent() helper (consumes SDK async stream)
   errors.py       — Error hierarchy (SwarmError base)
@@ -42,6 +43,7 @@ uv run swarm resume --repo .              # resume last interrupted run
 - **Session recording** — events → `.claude-swarm/logs/<run_id>/events.jsonl`, summary → `metadata.json`
 - **Cost tracking** — per-worker and total, accumulated in SessionRecorder
 - **Worker retry** — `spawn_worker_with_retry()` retries failed workers with error context; escalates model (Sonnet → Opus) on final attempt
+- **Shared notes** — workers write/read JSON notes in `.claude-swarm/notes/<run_id>/`; one file per worker (`<worker_id>.json`); NoteManager validates on read with graceful fallback
 - **Conflict resolution** — on merge conflict, spawns a resolver agent to fix conflict markers before falling back to `MergeConflictError`
 - **SDK usage** — `claude_agent_sdk.query()` returns `AsyncIterator[Message]`; `run_agent()` consumes stream, returns `ResultMessage`
 - **State persistence** — `StateManager` writes `.claude-swarm/state.json` (atomic via `os.replace`); tracks run/worker lifecycle for `status` and `resume` commands

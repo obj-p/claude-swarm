@@ -17,6 +17,7 @@ from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError, SwarmError
 from claude_swarm.integrator import integrate_results
 from claude_swarm.models import RunStatus, SwarmResult, TaskPlan, WorkerResult, WorkerStatus, WorkerTask
+from claude_swarm.notes import NoteManager
 from claude_swarm.prompts import PLANNER_SYSTEM_PROMPT
 from claude_swarm.session import SessionRecorder
 from claude_swarm.state import StateManager
@@ -38,6 +39,7 @@ class Orchestrator:
         self.worktree_mgr = WorktreeManager(config.repo_path, self.run_id)
         self.session = SessionRecorder(config.repo_path, self.run_id)
         self.state_mgr = StateManager(config.repo_path)
+        self.note_mgr = NoteManager(config.repo_path, self.run_id)
 
     async def _checkpoint(self, message: str, context: str = "", resume_status: RunStatus = RunStatus.EXECUTING) -> bool:
         """Prompt user for confirmation. Returns True if approved.
@@ -165,6 +167,7 @@ class Orchestrator:
                     task_description=self.config.task,
                     orchestrator_model=self.config.orchestrator_model,
                     resolve_conflicts=self.config.resolve_conflicts,
+                    notes_summary=self.note_mgr.format_notes_summary(),
                 )
 
                 if integration_success:
@@ -231,8 +234,9 @@ class Orchestrator:
         else:
             self.state_mgr.fail_run(self.run_id, "Integration failed")
 
-        # Cleanup worktrees (keep branches for PR)
+        # Cleanup worktrees (keep branches for PR) and notes
         await self.worktree_mgr.cleanup_all()
+        self.note_mgr.cleanup()
 
         return SwarmResult(
             run_id=self.run_id,
@@ -304,6 +308,9 @@ class Orchestrator:
         # Disable gc during parallel operations
         await self.worktree_mgr.disable_gc()
 
+        # Set up shared notes directory
+        notes_dir = self.note_mgr.setup()
+
         # Create worktrees sequentially to avoid git lock contention
         console.print("[blue]Creating worktrees...[/blue]")
         worktree_paths: dict[str, Path] = {}
@@ -337,6 +344,7 @@ class Orchestrator:
                         escalation_model=self.config.escalation_model,
                         enable_escalation=self.config.enable_escalation,
                         max_budget_usd=self.config.max_worker_cost,
+                        notes_dir=notes_dir,
                     )
                     # Get changed files from worktree
                     changed = await self.worktree_mgr.get_worktree_changed_files(task.worker_id)
@@ -446,3 +454,7 @@ class Orchestrator:
             await self.worktree_mgr.cleanup_all(force=True)
         except Exception as e:
             logger.error("Cleanup failed: %s", e)
+        try:
+            self.note_mgr.cleanup()
+        except Exception as e:
+            logger.error("Notes cleanup failed: %s", e)

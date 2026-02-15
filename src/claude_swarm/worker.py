@@ -10,7 +10,12 @@ from claude_agent_sdk import ClaudeAgentOptions
 
 from claude_swarm.errors import WorkerError
 from claude_swarm.models import WorkerResult, WorkerTask
-from claude_swarm.prompts import WORKER_RETRY_CONTEXT, WORKER_SYSTEM_PROMPT
+from claude_swarm.prompts import (
+    WORKER_COORDINATION_INSTRUCTIONS,
+    WORKER_NOTES_SECTION,
+    WORKER_RETRY_CONTEXT,
+    WORKER_SYSTEM_PROMPT,
+)
 from claude_swarm.util import run_agent
 
 logger = logging.getLogger(__name__)
@@ -24,6 +29,7 @@ async def _spawn_single_attempt(
     extra_context: str = "",
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
+    notes_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a single Claude Code worker attempt in an isolated worktree."""
     start = time.monotonic()
@@ -33,6 +39,16 @@ async def _spawn_single_attempt(
         target_files="\n".join(f"- {f}" for f in task.target_files) if task.target_files else "No specific files targeted.",
         acceptance_criteria="\n".join(f"- {c}" for c in task.acceptance_criteria) if task.acceptance_criteria else "Complete the task as described.",
     )
+
+    if notes_dir is not None:
+        system_prompt += WORKER_NOTES_SECTION.format(
+            notes_dir_path=notes_dir,
+            worker_id=task.worker_id,
+        )
+        if task.coordination_notes:
+            system_prompt += WORKER_COORDINATION_INSTRUCTIONS.format(
+                coordination_instructions=task.coordination_notes,
+            )
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -86,6 +102,7 @@ async def spawn_worker_with_retry(
     enable_escalation: bool = True,
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
+    notes_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a worker with retry and optional model escalation.
 
@@ -111,6 +128,7 @@ async def spawn_worker_with_retry(
             extra_context=extra_context,
             max_budget_usd=max_budget_usd,
             max_turns=max_turns,
+            notes_dir=notes_dir,
         )
         result.attempt = attempt
         result.model_used = current_model
@@ -129,6 +147,7 @@ async def spawn_worker(
     model: str = "sonnet",
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
+    notes_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a Claude Code worker agent in an isolated worktree.
 
@@ -140,4 +159,5 @@ async def spawn_worker(
         max_retries=1,
         max_budget_usd=max_budget_usd,
         max_turns=max_turns,
+        notes_dir=notes_dir,
     )

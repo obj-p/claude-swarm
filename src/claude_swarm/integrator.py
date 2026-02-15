@@ -40,6 +40,7 @@ async def integrate_results(
     task_description: str = "",
     orchestrator_model: str = "opus",
     resolve_conflicts: bool = True,
+    notes_summary: str = "",
 ) -> tuple[bool, str | None, str | None]:
     """Merge worker branches, optionally run tests and create a PR.
 
@@ -107,7 +108,7 @@ async def integrate_results(
 
         # Optional semantic review
         if review:
-            await _run_semantic_review(integration_path, orchestrator_model)
+            await _run_semantic_review(integration_path, orchestrator_model, notes_summary=notes_summary)
 
         # Create PR
         pr_url: str | None = None
@@ -142,7 +143,7 @@ async def _run_command(command: str, cwd: Path) -> tuple[bool, str]:
     return proc.returncode == 0, output.strip()
 
 
-async def _run_semantic_review(integration_path: Path, model: str) -> None:
+async def _run_semantic_review(integration_path: Path, model: str, *, notes_summary: str = "") -> None:
     """Spawn a review agent to check for semantic conflicts."""
     options = ClaudeAgentOptions(
         system_prompt=REVIEWER_SYSTEM_PROMPT,
@@ -154,8 +155,11 @@ async def _run_semantic_review(integration_path: Path, model: str) -> None:
         max_turns=20,
         setting_sources=["project"],
     )
+    prompt = "Review the merged changes for semantic conflicts and fix any issues you find."
+    if notes_summary:
+        prompt += f"\n\n{notes_summary}"
     await run_agent(
-        prompt="Review the merged changes for semantic conflicts and fix any issues you find.",
+        prompt=prompt,
         options=options,
     )
 

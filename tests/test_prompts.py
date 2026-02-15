@@ -4,6 +4,8 @@ from claude_swarm.prompts import (
     CONFLICT_RESOLVER_SYSTEM_PROMPT,
     PLANNER_SYSTEM_PROMPT,
     REVIEWER_SYSTEM_PROMPT,
+    WORKER_COORDINATION_INSTRUCTIONS,
+    WORKER_NOTES_SECTION,
     WORKER_RETRY_CONTEXT,
     WORKER_SYSTEM_PROMPT,
 )
@@ -62,3 +64,38 @@ def test_conflict_resolver_prompt_non_empty():
     assert isinstance(CONFLICT_RESOLVER_SYSTEM_PROMPT, str)
     assert len(CONFLICT_RESOLVER_SYSTEM_PROMPT) > 0
     assert "merge conflict" in CONFLICT_RESOLVER_SYSTEM_PROMPT.lower()
+
+
+def test_worker_notes_section_format():
+    result = WORKER_NOTES_SECTION.format(
+        notes_dir_path="/tmp/notes",
+        worker_id="w1",
+    )
+    assert "/tmp/notes" in result
+    assert "w1" in result
+    assert "Write tool" in result or "Write" in result
+
+
+def test_notes_section_preserves_json_braces():
+    result = WORKER_NOTES_SECTION.format(
+        notes_dir_path="/tmp/notes",
+        worker_id="w1",
+    )
+    # JSON example braces should survive .format() as single braces
+    assert '"worker_id"' in result
+    assert "{\n" in result  # Opening brace of JSON example
+    assert "{{" not in result  # No double-braces in output
+
+
+def test_planner_includes_notes_guidance():
+    result = PLANNER_SYSTEM_PROMPT.format(max_workers=4)
+    assert "coordination_notes" in result
+    assert "Shared Notes" in result
+
+
+def test_worker_coordination_instructions_format():
+    result = WORKER_COORDINATION_INSTRUCTIONS.format(
+        coordination_instructions="Write a note about the API schema",
+    )
+    assert "Write a note about the API schema" in result
+    assert "Coordination Instructions" in result

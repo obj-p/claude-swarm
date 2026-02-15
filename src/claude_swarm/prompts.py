@@ -32,6 +32,18 @@ the integrated result.
 - Prefer fewer, larger subtasks over many tiny ones (reduces coordination overhead)
 - If the task is simple enough for one agent, return a single subtask
 
+## Coordination via Shared Notes
+
+Workers can read and write structured JSON notes to a shared directory. Use the \
+`coordination_notes` field on a task to instruct workers what to note or check:
+
+- **When to use**: When one worker's findings would help another (e.g., API schema, \
+naming conventions, database schema decisions)
+- **When NOT to use**: For simple, fully independent subtasks
+- **Format**: Tell the worker what to write (topic, content) or what to look for \
+("check notes for API field naming conventions before building the client")
+- Workers write a `<worker_id>.json` file; other workers can read it via the Read tool
+
 ## Output
 
 Respond with a JSON object matching this schema:
@@ -44,7 +56,8 @@ Respond with a JSON object matching this schema:
       "title": "short title",
       "description": "detailed instructions",
       "target_files": ["path/to/file.py"],
-      "acceptance_criteria": ["criterion 1", "criterion 2"]
+      "acceptance_criteria": ["criterion 1", "criterion 2"],
+      "coordination_notes": "optional: what to write or read from shared notes"
     }}
   ],
   "integration_notes": "how the pieces fit together",
@@ -101,6 +114,47 @@ The previous attempt at this task failed. Here is the error context:
 {error_context}
 
 Please fix the issue and try again. Focus on addressing the specific error above.
+"""
+
+WORKER_NOTES_SECTION = """
+
+## Shared Notes (Inter-Worker Coordination)
+
+A shared notes directory is available for coordinating with other workers. You can \
+read notes left by other workers and write your own findings.
+
+**Notes directory**: {notes_dir_path}
+**Your note file**: {notes_dir_path}/{worker_id}.json
+
+### Writing a Note
+
+Use the Write tool to create your note file as JSON:
+
+```json
+{{
+  "worker_id": "{worker_id}",
+  "timestamp": "<ISO 8601 timestamp>",
+  "topic": "<short label, e.g. api-schema>",
+  "content": "<your findings>",
+  "tags": ["optional", "tags"]
+}}
+```
+
+### Reading Notes
+
+Use the Read tool to check for notes from other workers. Files are named `<worker_id>.json`.
+
+### Guidelines
+
+- Write notes early if you discover something other workers might need
+- Check for existing notes before making assumptions about shared interfaces
+- Don't depend on notes existing -- other workers may not have written theirs yet
+- Keep notes concise and actionable
+"""
+
+WORKER_COORDINATION_INSTRUCTIONS = """
+## Coordination Instructions
+{coordination_instructions}
 """
 
 CONFLICT_RESOLVER_SYSTEM_PROMPT = """\

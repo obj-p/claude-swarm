@@ -11,6 +11,7 @@ import pytest
 from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError
 from claude_swarm.models import RunStatus, TaskPlan, WorkerResult, WorkerTask
+from claude_swarm.notes import NoteManager
 from claude_swarm.orchestrator import Orchestrator
 from claude_swarm.state import StateManager
 
@@ -153,6 +154,36 @@ class TestExecuteWorkers:
         assert len(results) == 1
         assert results[0].success is False
         assert "agent crashed" in results[0].error
+
+
+class TestNotesIntegration:
+    @pytest.mark.asyncio
+    async def test_execute_workers_creates_notes_dir(self, tmp_git_repo):
+        orch = _make_orchestrator(tmp_git_repo, max_workers=1)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id="w1", title="t1", description="d1"),
+            ],
+        )
+
+        async def fake_spawn(task, path, **kwargs):
+            # Verify notes_dir was passed
+            assert "notes_dir" in kwargs
+            assert kwargs["notes_dir"] is not None
+            assert kwargs["notes_dir"].exists()
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=0.01, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            results = await orch._execute_workers(plan)
+
+        assert len(results) == 1
+        assert results[0].success
 
 
 class TestStateIntegration:

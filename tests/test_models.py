@@ -15,6 +15,10 @@ class TestWorkerTask:
         assert t.target_files == []
         assert t.acceptance_criteria == []
 
+    def test_coordination_notes_default(self):
+        t = WorkerTask(worker_id="w1", title="Do thing", description="Details")
+        assert t.coordination_notes == ""
+
     def test_full(self):
         t = WorkerTask(
             worker_id="w1",
