@@ -15,6 +15,7 @@ from rich.text import Text
 
 from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError, SwarmError
+from claude_swarm.guards import swarm_can_use_tool
 from claude_swarm.integrator import integrate_results
 from claude_swarm.models import RunStatus, SwarmResult, TaskPlan, WorkerResult, WorkerStatus, WorkerTask
 from claude_swarm.notes import NoteManager
@@ -273,6 +274,7 @@ class Orchestrator:
             max_turns=30,
             output_format=plan_schema,
             setting_sources=["project"],
+            can_use_tool=swarm_can_use_tool,
         )
 
         result = await run_agent(
@@ -328,9 +330,29 @@ class Orchestrator:
         console.print(f"[blue]Launching {len(plan.tasks)} worker(s)...[/blue]\n")
         semaphore = asyncio.Semaphore(self.config.max_workers)
 
+        _running_cost = 0.0
+        _cost_exceeded = False
+
         async def launch_with_throttle(task: WorkerTask, delay: float) -> WorkerResult:
+            nonlocal _running_cost, _cost_exceeded
             await asyncio.sleep(delay)
+
             async with semaphore:
+                # Check INSIDE semaphore so we see updates from just-finished workers
+                if _cost_exceeded:
+                    console.print(f"  {task.worker_id}: [yellow]skipped[/yellow] — cost limit exceeded")
+                    self.state_mgr.update_worker(
+                        self.run_id, task.worker_id,
+                        status=WorkerStatus.FAILED,
+                        error="Skipped: cost limit exceeded",
+                        completed_at=self.state_mgr._now(),
+                    )
+                    return WorkerResult(
+                        worker_id=task.worker_id,
+                        success=False,
+                        error="Skipped: cost limit exceeded",
+                    )
+
                 self.session.worker_start(task.worker_id, task.title)
                 self.state_mgr.update_worker(
                     self.run_id, task.worker_id,
@@ -372,6 +394,19 @@ class Orchestrator:
                         model_used=result.model_used,
                         completed_at=self.state_mgr._now(),
                     )
+                    if result.cost_usd is not None:
+                        _running_cost += result.cost_usd
+                        if _running_cost > self.config.max_cost:
+                            _cost_exceeded = True
+                            logger.warning(
+                                "Cost limit exceeded: $%.2f > $%.2f",
+                                _running_cost, self.config.max_cost,
+                            )
+                            console.print(
+                                f"  [yellow]Cost limit reached (${_running_cost:.2f} > "
+                                f"${self.config.max_cost:.2f}). Remaining workers will be skipped.[/yellow]"
+                            )
+
                     status = "[green]done[/green]" if result.success else "[red]failed[/red]"
                     cost_str = f" (${result.cost_usd:.2f})" if result.cost_usd is not None else ""
                     console.print(f"  {task.worker_id}: {status}{cost_str} — {task.title}")

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from claude_swarm.errors import WorkerError
+from claude_swarm.guards import swarm_can_use_tool
 from claude_swarm.models import WorkerTask
 from claude_swarm.prompts import WORKER_NOTES_SECTION
 from claude_swarm.worker import spawn_worker
@@ -89,3 +90,12 @@ class TestSpawnWorker:
             options = mock_run.call_args.kwargs["options"]
             assert "Coordination Instructions" in options.system_prompt
             assert "Write a note about the API schema" in options.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_can_use_tool_is_set(self, make_result_message, tmp_path):
+        msg = make_result_message()
+        with patch("claude_swarm.worker.run_agent", new_callable=AsyncMock, return_value=msg) as mock_run:
+            await spawn_worker(_make_task(), tmp_path)
+            options = mock_run.call_args.kwargs["options"]
+            assert options.can_use_tool is not None
+            assert options.can_use_tool is swarm_can_use_tool

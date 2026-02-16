@@ -9,6 +9,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions
 
 from claude_swarm.errors import WorkerError
+from claude_swarm.guards import swarm_can_use_tool
 from claude_swarm.models import WorkerResult, WorkerTask
 from claude_swarm.prompts import (
     WORKER_COORDINATION_INSTRUCTIONS,
@@ -59,6 +60,7 @@ async def _spawn_single_attempt(
         max_budget_usd=max_budget_usd,
         max_turns=max_turns,
         setting_sources=["project"],
+        can_use_tool=swarm_can_use_tool,
     )
 
     prompt = f"## Task: {task.title}\n\n{task.description}"

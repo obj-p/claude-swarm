@@ -10,6 +10,7 @@ from pathlib import Path
 from claude_agent_sdk import ClaudeAgentOptions
 
 from claude_swarm.errors import IntegrationError, MergeConflictError
+from claude_swarm.guards import swarm_can_use_tool
 from claude_swarm.models import WorkerResult
 from claude_swarm.prompts import CONFLICT_RESOLVER_SYSTEM_PROMPT, REVIEWER_SYSTEM_PROMPT
 from claude_swarm.util import run_agent
@@ -156,6 +157,7 @@ async def _run_semantic_review(integration_path: Path, model: str, *, notes_summ
         max_budget_usd=3.0,
         max_turns=20,
         setting_sources=["project"],
+        can_use_tool=swarm_can_use_tool,
     )
     prompt = "Review the merged changes for semantic conflicts and fix any issues you find."
     if notes_summary:
@@ -182,6 +184,7 @@ async def _resolve_merge_conflict(
         allowed_tools=["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
         max_budget_usd=3.0,
         max_turns=20,
+        can_use_tool=swarm_can_use_tool,
     )
     prompt = f"Resolve the merge conflicts from branch {branch} (worker: {worker_result.worker_id})."
     try:

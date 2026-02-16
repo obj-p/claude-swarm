@@ -234,3 +234,122 @@ class TestStateIntegration:
         run = orch.state_mgr.get_run(orch.run_id)
         assert run is not None
         assert run.status == RunStatus.INTERRUPTED
+
+
+class TestCostCircuitBreaker:
+    @pytest.mark.asyncio
+    async def test_workers_skipped_when_cost_exceeded(self, tmp_git_repo):
+        """3 workers, max_cost=0.05, each costs $0.10, max_workers=1 -> only 1 spawned, 2 skipped."""
+        orch = _make_orchestrator(tmp_git_repo, max_workers=1, max_cost=0.05)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id="w1", title="t1", description="d1"),
+                WorkerTask(worker_id="w2", title="t2", description="d2"),
+                WorkerTask(worker_id="w3", title="t3", description="d3"),
+            ],
+        )
+
+        spawn_count = 0
+
+        async def fake_spawn(task, path, **kwargs):
+            nonlocal spawn_count
+            spawn_count += 1
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=0.10, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            results = await orch._execute_workers(plan)
+
+        assert spawn_count == 1
+        assert len(results) == 3
+        skipped = [r for r in results if r.error and "cost limit exceeded" in r.error]
+        assert len(skipped) == 2
+
+    @pytest.mark.asyncio
+    async def test_all_workers_run_under_budget(self, tmp_git_repo):
+        """2 workers, max_cost=10, each costs $0.01 -> all succeed."""
+        orch = _make_orchestrator(tmp_git_repo, max_workers=2, max_cost=10.0)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id="w1", title="t1", description="d1"),
+                WorkerTask(worker_id="w2", title="t2", description="d2"),
+            ],
+        )
+
+        async def fake_spawn(task, path, **kwargs):
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=0.01, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            results = await orch._execute_workers(plan)
+
+        assert len(results) == 2
+        assert all(r.success for r in results)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_workers_respect_budget(self, tmp_git_repo):
+        """5 workers, max_workers=3, max_cost=0.05, each costs $0.10 -> only 1 spawns, 4 skipped."""
+        orch = _make_orchestrator(tmp_git_repo, max_workers=3, max_cost=0.05)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id=f"w{i}", title=f"t{i}", description=f"d{i}")
+                for i in range(1, 6)
+            ],
+        )
+
+        spawn_count = 0
+
+        async def fake_spawn(task, path, **kwargs):
+            nonlocal spawn_count
+            spawn_count += 1
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=0.10, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            results = await orch._execute_workers(plan)
+
+        assert spawn_count == 1
+        assert len(results) == 5
+        skipped = [r for r in results if r.error and "cost limit exceeded" in r.error]
+        assert len(skipped) == 4
+
+    @pytest.mark.asyncio
+    async def test_none_cost_no_trigger(self, tmp_git_repo):
+        """Workers returning cost_usd=None don't trigger breaker."""
+        orch = _make_orchestrator(tmp_git_repo, max_workers=1, max_cost=0.01)
+        orch.state_mgr.start_run(orch.run_id, "test", orch.config)
+        plan = TaskPlan(
+            original_task="test",
+            reasoning="test",
+            tasks=[
+                WorkerTask(worker_id="w1", title="t1", description="d1"),
+                WorkerTask(worker_id="w2", title="t2", description="d2"),
+            ],
+        )
+
+        async def fake_spawn(task, path, **kwargs):
+            return WorkerResult(
+                worker_id=task.worker_id, success=True,
+                cost_usd=None, duration_ms=100, summary="ok",
+            )
+
+        with patch("claude_swarm.orchestrator.spawn_worker_with_retry", side_effect=fake_spawn):
+            results = await orch._execute_workers(plan)
+
+        assert len(results) == 2
+        assert all(r.success for r in results)

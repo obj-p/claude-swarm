@@ -9,8 +9,16 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from claude_swarm.errors import IntegrationError, MergeConflictError
-from claude_swarm.integrator import _check_gh_installed, _run_command, create_pr, integrate_results
+from claude_swarm.guards import swarm_can_use_tool
+from claude_swarm.integrator import (
+    _check_gh_installed,
+    _run_command,
+    _run_semantic_review,
+    create_pr,
+    integrate_results,
+)
 from claude_swarm.models import WorkerResult
+from claude_swarm.prompts import REVIEWER_SYSTEM_PROMPT
 from claude_swarm.worktree import WorktreeManager
 
 
@@ -253,3 +261,91 @@ class TestCreatePrPublic:
 
         assert "Closes #42" in captured_body["value"]
         assert pr_url == "https://github.com/o/r/pull/1"
+
+
+class TestSemanticReview:
+    async def test_calls_run_agent_with_correct_options(self, tmp_path):
+        with patch("claude_swarm.integrator.run_agent", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = AsyncMock(is_error=False)
+            await _run_semantic_review(tmp_path, "opus")
+            options = mock_run.call_args.kwargs["options"]
+            assert options.system_prompt == REVIEWER_SYSTEM_PROMPT
+            assert options.model == "opus"
+            assert options.max_budget_usd == 3.0
+            assert options.max_turns == 20
+            assert options.cwd == str(tmp_path)
+            assert options.can_use_tool is swarm_can_use_tool
+
+    async def test_forwards_notes_summary(self, tmp_path):
+        with patch("claude_swarm.integrator.run_agent", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = AsyncMock(is_error=False)
+            await _run_semantic_review(tmp_path, "opus", notes_summary="Worker notes here")
+            prompt = mock_run.call_args.kwargs["prompt"]
+            assert "Worker notes here" in prompt
+
+    async def test_no_notes_summary(self, tmp_path):
+        with patch("claude_swarm.integrator.run_agent", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = AsyncMock(is_error=False)
+            await _run_semantic_review(tmp_path, "opus", notes_summary="")
+            prompt = mock_run.call_args.kwargs["prompt"]
+            # Should be the base prompt only, no extra newline/notes
+            assert prompt == "Review the merged changes for semantic conflicts and fix any issues you find."
+
+    async def test_reviewer_allowed_tools(self, tmp_path):
+        with patch("claude_swarm.integrator.run_agent", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = AsyncMock(is_error=False)
+            await _run_semantic_review(tmp_path, "opus")
+            options = mock_run.call_args.kwargs["options"]
+            assert options.allowed_tools == ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+            assert options.permission_mode == "acceptEdits"
+
+
+class TestIntegrateResultsWithReview:
+    async def test_review_true_invokes_semantic_review(self, tmp_git_repo):
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+
+        path1 = await mgr.create_worktree("w1", "main")
+        (path1 / "file_a.txt").write_text("from worker 1\n")
+        subprocess.run(["git", "add", "file_a.txt"], cwd=path1, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w1 work"],
+            cwd=path1, check=True, capture_output=True,
+        )
+
+        worker_results = [WorkerResult(worker_id="w1", success=True, summary="done w1")]
+
+        with patch("claude_swarm.integrator._run_semantic_review", new_callable=AsyncMock) as mock_review:
+            success, pr_url, error = await integrate_results(
+                mgr, worker_results, "main",
+                run_id="run-1", should_create_pr=False,
+                review=True, orchestrator_model="opus", notes_summary="some notes",
+            )
+
+        assert success is True
+        mock_review.assert_called_once()
+        call_kwargs = mock_review.call_args
+        assert call_kwargs[0][1] == "opus"
+        assert call_kwargs[1]["notes_summary"] == "some notes"
+
+    async def test_review_false_skips_semantic_review(self, tmp_git_repo):
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+
+        path1 = await mgr.create_worktree("w1", "main")
+        (path1 / "file_a.txt").write_text("from worker 1\n")
+        subprocess.run(["git", "add", "file_a.txt"], cwd=path1, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w1 work"],
+            cwd=path1, check=True, capture_output=True,
+        )
+
+        worker_results = [WorkerResult(worker_id="w1", success=True, summary="done w1")]
+
+        with patch("claude_swarm.integrator._run_semantic_review", new_callable=AsyncMock) as mock_review:
+            success, pr_url, error = await integrate_results(
+                mgr, worker_results, "main",
+                run_id="run-1", should_create_pr=False,
+                review=False,
+            )
+
+        assert success is True
+        mock_review.assert_not_called()
