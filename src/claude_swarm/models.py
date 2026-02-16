@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class OversightLevel(str, Enum):
@@ -70,6 +70,37 @@ class WorkerResult(BaseModel):
     error: str | None = None
     attempt: int = 1
     model_used: str | None = None
+
+
+class IssueConfig(BaseModel):
+    """Configuration extracted from a GitHub issue for swarm processing."""
+
+    issue_number: int
+    owner: str
+    repo_name: str
+    title: str
+    body: str
+    labels: list[str] = Field(default_factory=list)
+    # Extracted overrides (None = use default)
+    oversight: str | None = None
+    model: str | None = None
+    max_workers: int | None = None
+    max_cost: float | None = None
+    max_worker_cost: float | None = None
+
+    @field_validator("oversight")
+    @classmethod
+    def _validate_oversight(cls, v: str | None) -> str | None:
+        if v is not None and v not in {level.value for level in OversightLevel}:
+            return None
+        return v
+
+    @property
+    def task_description(self) -> str:
+        title = self.title.removeprefix("[swarm]").strip()
+        if self.body:
+            return f"{title}\n\n{self.body}"
+        return title
 
 
 class SwarmResult(BaseModel):

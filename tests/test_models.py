@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from claude_swarm.models import SwarmResult, TaskPlan, WorkerResult, WorkerTask
+from claude_swarm.models import IssueConfig, SwarmResult, TaskPlan, WorkerResult, WorkerTask
 
 
 class TestWorkerTask:
@@ -87,6 +87,41 @@ class TestWorkerResult:
     def test_model_used_default(self):
         r = WorkerResult(worker_id="w1", success=True)
         assert r.model_used is None
+
+
+class TestIssueConfig:
+    def test_task_description(self):
+        ic = IssueConfig(
+            issue_number=1, owner="o", repo_name="r",
+            title="[swarm] Fix the tests",
+            body="The tests are broken.",
+        )
+        assert ic.task_description == "Fix the tests\n\nThe tests are broken."
+
+    def test_task_description_no_prefix(self):
+        ic = IssueConfig(
+            issue_number=1, owner="o", repo_name="r",
+            title="Add logging",
+            body="Details here.",
+        )
+        assert ic.task_description == "Add logging\n\nDetails here."
+
+    def test_task_description_empty_body(self):
+        ic = IssueConfig(
+            issue_number=1, owner="o", repo_name="r",
+            title="Add logging",
+            body="",
+        )
+        assert ic.task_description == "Add logging"
+        assert not ic.task_description.endswith("\n")
+
+    def test_invalid_oversight_coerced_to_none(self):
+        ic = IssueConfig(
+            issue_number=1, owner="o", repo_name="r",
+            title="T", body="B",
+            oversight="yolo",
+        )
+        assert ic.oversight is None
 
 
 class TestSwarmResult:

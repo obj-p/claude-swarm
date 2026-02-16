@@ -6,19 +6,21 @@ Orchestration system for dynamic pools of Claude agents working autonomously on 
 
 ```
 src/claude_swarm/
-  cli.py          — Click CLI: run, plan, cleanup, status, resume commands
-  config.py       — SwarmConfig dataclass (from CLI args)
-  orchestrator.py — Pipeline: plan → execute → integrate
-  worker.py       — Spawns Claude Code agents in worktrees
-  worktree.py     — Git worktree lifecycle (create/remove/cleanup)
-  integrator.py   — Merges branches, runs tests, creates PRs via gh
-  session.py      — JSONL event logging + cost tracking
-  state.py        — Persistent state management (StateManager + Pydantic state models)
-  models.py       — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, RunStatus, WorkerStatus, OversightLevel
-  notes.py        — Shared notes for inter-worker coordination (NoteManager + SharedNote model)
-  prompts.py      — System prompts for planner, worker, reviewer agents
-  util.py         — run_agent() helper (consumes SDK async stream)
-  errors.py       — Error hierarchy (SwarmError base)
+  cli.py              — Click CLI: run, plan, cleanup, status, resume, process, watch commands
+  config.py           — SwarmConfig dataclass (from CLI args)
+  orchestrator.py     — Pipeline: plan → execute → integrate
+  worker.py           — Spawns Claude Code agents in worktrees
+  worktree.py         — Git worktree lifecycle (create/remove/cleanup)
+  integrator.py       — Merges branches, runs tests, creates PRs via gh
+  github.py           — GitHub API wrapper (gh CLI): issues, labels, comments
+  issue_processor.py  — IssueProcessor (single issue) + IssueWatcher (poll loop)
+  session.py          — JSONL event logging + cost tracking
+  state.py            — Persistent state management (StateManager + Pydantic state models)
+  models.py           — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, IssueConfig, RunStatus, WorkerStatus, OversightLevel
+  notes.py            — Shared notes for inter-worker coordination (NoteManager + SharedNote model)
+  prompts.py          — System prompts for planner, worker, reviewer agents
+  util.py             — run_agent() helper (consumes SDK async stream)
+  errors.py           — Error hierarchy (SwarmError, GitHubError base)
 ```
 
 ## Commands
@@ -28,6 +30,8 @@ uv run swarm run "task" --repo . --workers 4 --model sonnet --no-pr
 uv run swarm run "task" --repo . --oversight autonomous   # auto-merge PR if CI passes
 uv run swarm run "task" --repo . --oversight checkpoint   # pause at key decisions
 uv run swarm plan "task" --repo .          # dry-run, plan only
+uv run swarm process --issue 42 --repo .  # process a single GitHub issue
+uv run swarm watch --repo . --interval 30 # poll for issues labeled 'swarm'
 uv run swarm cleanup --repo .             # remove all worktrees + branches
 uv run swarm status --repo .              # show current/recent run state
 uv run swarm resume --repo .              # resume last interrupted run
@@ -50,6 +54,7 @@ uv run swarm resume --repo .              # resume last interrupted run
 - **State file** — `.claude-swarm/state.json` (gitignored); contains `SwarmState` with `active_run` pointer and per-run `RunState`/`WorkerState`
 - **Resumption** — `swarm resume` detects incomplete workers via `WorkerStatus`, re-executes only pending/failed workers using the saved plan
 - **Oversight levels** — `--oversight autonomous|pr-gated|checkpoint`; autonomous auto-merges via `gh pr merge --auto --squash`; checkpoint pauses at 3 decision points (execute workers, integrate, create PR) with terminal confirmation; pr-gated (default) creates PR for human merge
+- **GitHub Issues intake** — `swarm process --issue N` (one-shot) and `swarm watch` (poll loop); label state machine: `swarm` → `swarm:active` → `swarm:done`/`swarm:failed`; `issue_number` threads through to PR body as `Closes #N`
 
 ## Development
 

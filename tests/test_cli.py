@@ -1,5 +1,7 @@
 """Tests for CLI commands."""
 
+import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -128,6 +130,24 @@ def test_oversight_default_is_pr_gated(runner, tmp_path):
         assert config.oversight == "pr-gated"
 
 
+def test_process_command_registered(runner):
+    result = runner.invoke(cli, ["process", "--help"])
+    assert result.exit_code == 0
+    assert "--issue" in result.output
+
+
+def test_watch_command_registered(runner):
+    result = runner.invoke(cli, ["watch", "--help"])
+    assert result.exit_code == 0
+    assert "--interval" in result.output
+
+
+def test_process_requires_issue(runner):
+    result = runner.invoke(cli, ["process"])
+    assert result.exit_code != 0
+    assert "Missing" in result.output or "required" in result.output.lower()
+
+
 def test_status_shows_run_data(runner, tmp_path):
     from claude_swarm.config import SwarmConfig
     from claude_swarm.state import StateManager
@@ -141,3 +161,44 @@ def test_status_shows_run_data(runner, tmp_path):
     assert result.exit_code == 0
     assert "run-abc" in result.output
     assert "test task" in result.output
+
+
+def test_process_cli_integration(runner, tmp_path):
+    issue_data = {
+        "number": 42,
+        "title": "Test issue",
+        "body": "Body text",
+        "labels": [{"name": "swarm"}],
+    }
+    with patch("claude_swarm.github.get_repo_slug", AsyncMock(return_value=("owner", "repo"))), \
+         patch("claude_swarm.github.get_issue", AsyncMock(return_value=issue_data)), \
+         patch("claude_swarm.issue_processor.IssueProcessor.process", AsyncMock()) as mock_process:
+        result = runner.invoke(cli, ["process", "--issue", "42", "--repo", str(tmp_path)])
+        assert result.exit_code == 0
+        mock_process.assert_called_once()
+
+
+def test_process_max_cost_option(runner, tmp_path):
+    issue_data = {
+        "number": 42,
+        "title": "Test issue",
+        "body": "Body text",
+        "labels": [{"name": "swarm"}],
+    }
+
+    captured_config = {}
+
+    async def capture_process(self):
+        captured_config["max_cost"] = self.issue_config.max_cost
+        captured_config["max_worker_cost"] = self.issue_config.max_worker_cost
+
+    with patch("claude_swarm.github.get_repo_slug", AsyncMock(return_value=("owner", "repo"))), \
+         patch("claude_swarm.github.get_issue", AsyncMock(return_value=issue_data)), \
+         patch("claude_swarm.issue_processor.IssueProcessor.process", capture_process):
+        result = runner.invoke(cli, [
+            "process", "--issue", "42", "--repo", str(tmp_path),
+            "--max-cost", "10", "--max-worker-cost", "2.5",
+        ])
+        assert result.exit_code == 0
+        assert captured_config["max_cost"] == 10.0
+        assert captured_config["max_worker_cost"] == 2.5

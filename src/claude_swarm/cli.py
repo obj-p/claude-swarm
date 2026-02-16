@@ -217,6 +217,119 @@ def status(repo: Path | None) -> None:
 
 @cli.command()
 @click.option("--repo", type=click.Path(exists=True, path_type=Path), default=None, help="Repository path (default: cwd)")
+@click.option("--issue", "issue_number", type=int, required=True, help="GitHub issue number to process")
+@click.option("--label", "trigger_label", type=str, default="swarm", help="Trigger label (default: swarm)")
+@click.option("--workers", type=int, default=None, help="Override max workers")
+@click.option("--model", type=str, default=None, help="Override worker model")
+@click.option(
+    "--oversight",
+    type=click.Choice(["autonomous", "pr-gated", "checkpoint"], case_sensitive=False),
+    default=None,
+    help="Override oversight level",
+)
+@click.option("--max-cost", type=float, default=None, help="Override max total cost in USD")
+@click.option("--max-worker-cost", type=float, default=None, help="Override max cost per worker in USD")
+@click.option("--verbose", is_flag=True, help="Verbose output")
+def process(
+    repo: Path | None,
+    issue_number: int,
+    trigger_label: str,
+    workers: int | None,
+    model: str | None,
+    oversight: str | None,
+    max_cost: float | None,
+    max_worker_cost: float | None,
+    verbose: bool,
+) -> None:
+    """Process a single GitHub issue through the swarm pipeline."""
+    import logging
+
+    from claude_swarm.github import get_issue, get_repo_slug
+    from claude_swarm.issue_processor import IssueProcessor, issue_config_to_swarm_config, parse_issue_config
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    repo_path = repo or Path.cwd()
+
+    async def _main() -> None:
+        owner, repo_name = await get_repo_slug(repo_path)
+        issue_data = await get_issue(owner, repo_name, issue_number, cwd=repo_path)
+        issue_config = parse_issue_config(issue_data, owner, repo_name)
+
+        # Apply CLI overrides
+        if workers is not None:
+            issue_config.max_workers = workers
+        if model is not None:
+            issue_config.model = model
+        if oversight is not None:
+            issue_config.oversight = oversight
+        if max_cost is not None:
+            issue_config.max_cost = max_cost
+        if max_worker_cost is not None:
+            issue_config.max_worker_cost = max_worker_cost
+
+        processor = IssueProcessor(
+            issue_config, repo_path, trigger_label=trigger_label,
+        )
+        await processor.process()
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+@cli.command()
+@click.option("--repo", type=click.Path(exists=True, path_type=Path), default=None, help="Repository path (default: cwd)")
+@click.option("--label", "trigger_label", type=str, default="swarm", help="Trigger label (default: swarm)")
+@click.option("--interval", type=int, default=30, help="Poll interval in seconds (default: 30)")
+@click.option("--verbose", is_flag=True, help="Verbose output")
+def watch(
+    repo: Path | None,
+    trigger_label: str,
+    interval: int,
+    verbose: bool,
+) -> None:
+    """Watch for GitHub issues and process them continuously."""
+    import logging
+
+    from claude_swarm.github import get_repo_slug
+    from claude_swarm.issue_processor import IssueWatcher
+
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG)
+    else:
+        logging.basicConfig(level=logging.INFO)
+
+    repo_path = repo or Path.cwd()
+
+    async def _main() -> None:
+        owner, repo_name = await get_repo_slug(repo_path)
+        console.print(f"[bold blue]claude-swarm[/bold blue] watching {owner}/{repo_name}")
+        console.print(f"[dim]Label:[/dim] {trigger_label}  [dim]Interval:[/dim] {interval}s\n")
+
+        watcher = IssueWatcher(
+            repo_path, owner, repo_name,
+            trigger_label=trigger_label,
+            interval=interval,
+        )
+        try:
+            await watcher.run()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            watcher.stop()
+            console.print("\n[yellow]Stopped watching.[/yellow]")
+
+    try:
+        asyncio.run(_main())
+    except KeyboardInterrupt:
+        sys.exit(130)
+
+
+@cli.command()
+@click.option("--repo", type=click.Path(exists=True, path_type=Path), default=None, help="Repository path (default: cwd)")
 @click.option("--run-id", type=str, default=None, help="Specific run to resume (default: last interrupted)")
 def resume(repo: Path | None, run_id: str | None) -> None:
     """Resume an interrupted swarm run."""
@@ -283,6 +396,7 @@ def resume(repo: Path | None, run_id: str | None) -> None:
         enable_escalation=run.config_snapshot.get("enable_escalation", True),
         resolve_conflicts=run.config_snapshot.get("resolve_conflicts", True),
         oversight=run.config_snapshot.get("oversight", "pr-gated"),
+        issue_number=run.config_snapshot.get("issue_number"),
     )
     config.run_id = run.run_id
 
@@ -342,6 +456,7 @@ def resume(repo: Path | None, run_id: str | None) -> None:
                     task_description=run.task,
                     orchestrator_model=config.orchestrator_model,
                     resolve_conflicts=config.resolve_conflicts,
+                    issue_number=config.issue_number,
                 )
                 if integration_success:
                     state_mgr.complete_run(run.run_id, pr_url=pr_url)

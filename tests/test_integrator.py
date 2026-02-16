@@ -208,3 +208,48 @@ class TestCreatePrPublic:
     def test_create_pr_is_importable(self):
         """Verify create_pr is a public callable (renamed from _create_pr)."""
         assert callable(create_pr)
+
+    @pytest.mark.asyncio
+    async def test_create_pr_with_issue_number(self, tmp_git_repo):
+        """Verify that create_pr includes 'Closes #N' when issue_number is provided."""
+        mgr = WorktreeManager(tmp_git_repo, "run-1")
+
+        path1 = await mgr.create_worktree("w1", "main")
+        (path1 / "file_a.txt").write_text("worker 1\n")
+        subprocess.run(["git", "add", "file_a.txt"], cwd=path1, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "-c", "user.email=t@t.com", "-c", "user.name=T", "commit", "-m", "w1"],
+            cwd=path1, check=True, capture_output=True,
+        )
+
+        worker_results = [WorkerResult(worker_id="w1", success=True, summary="done")]
+
+        # Mock _run_git for push and asyncio.create_subprocess_exec for gh pr create
+        captured_body = {}
+
+        async def mock_create_subprocess_exec(*args, **kwargs):
+            # Capture the --body argument from gh pr create
+            args_list = list(args)
+            if "gh" in args_list and "pr" in args_list:
+                body_idx = args_list.index("--body") + 1
+                captured_body["value"] = args_list[body_idx]
+
+            proc = AsyncMock()
+            proc.returncode = 0
+            proc.communicate = AsyncMock(return_value=(b"https://github.com/o/r/pull/1\n", b""))
+            return proc
+
+        with patch("claude_swarm.integrator._run_git", AsyncMock(return_value="")), \
+             patch("asyncio.create_subprocess_exec", side_effect=mock_create_subprocess_exec):
+            pr_url = await create_pr(
+                path1,
+                "swarm/run-1/integration",
+                "main",
+                run_id="run-1",
+                task_description="Fix tests",
+                worker_results=worker_results,
+                issue_number=42,
+            )
+
+        assert "Closes #42" in captured_body["value"]
+        assert pr_url == "https://github.com/o/r/pull/1"

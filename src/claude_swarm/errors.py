@@ -28,3 +28,7 @@ class MergeConflictError(IntegrationError):
 
 class PlanningError(SwarmError):
     """Error during task planning/decomposition."""
+
+
+class GitHubError(SwarmError):
+    """Error during GitHub API operations (gh CLI calls)."""

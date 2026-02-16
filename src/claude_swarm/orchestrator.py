@@ -168,6 +168,7 @@ class Orchestrator:
                     orchestrator_model=self.config.orchestrator_model,
                     resolve_conflicts=self.config.resolve_conflicts,
                     notes_summary=self.note_mgr.format_notes_summary(),
+                    issue_number=self.config.issue_number,
                 )
 
                 if integration_success:
@@ -191,6 +192,7 @@ class Orchestrator:
                                 run_id=self.run_id,
                                 task_description=self.config.task,
                                 worker_results=successful,
+                                issue_number=self.config.issue_number,
                             )
 
                     if pr_url:
