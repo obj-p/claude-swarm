@@ -181,3 +181,21 @@ class TestNoteManagerCleanup:
         assert notes_dir.exists()
         mgr.cleanup()
         assert not notes_dir.exists()
+
+
+class TestBackwardCompatShim:
+    def test_notemanager_is_coordinationmanager(self):
+        from claude_swarm.coordination import CoordinationManager
+        assert NoteManager is CoordinationManager
+
+    def test_sharednote_is_same_class(self):
+        from claude_swarm.coordination import SharedNote as CoordSharedNote
+        assert SharedNote is CoordSharedNote
+
+    def test_notemanager_has_coordination_methods(self, tmp_path):
+        mgr = NoteManager(tmp_path, "run-1")
+        assert hasattr(mgr, "coordination_dir")
+        assert hasattr(mgr, "read_inbox")
+        assert hasattr(mgr, "read_all_messages")
+        assert hasattr(mgr, "read_all_statuses")
+        assert hasattr(mgr, "format_coordination_summary")

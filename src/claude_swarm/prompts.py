@@ -32,17 +32,25 @@ the integrated result.
 - Prefer fewer, larger subtasks over many tiny ones (reduces coordination overhead)
 - If the task is simple enough for one agent, return a single subtask
 
-## Coordination via Shared Notes
+## Coordination
 
-Workers can read and write structured JSON notes to a shared directory. Use the \
-`coordination_notes` field on a task to instruct workers what to note or check:
+Workers coordinate through three channels in a shared directory:
 
-- **When to use**: When one worker's findings would help another (e.g., API schema, \
-naming conventions, database schema decisions)
-- **When NOT to use**: For simple, fully independent subtasks
-- **Format**: Tell the worker what to write (topic, content) or what to look for \
-("check notes for API field naming conventions before building the client")
-- Workers write a `<worker_id>.json` file; other workers can read it via the Read tool
+1. **Shared Notes** — Each worker writes a `<worker_id>.json` file. Use the \
+`coordination_notes` field to instruct workers what to note or check.
+2. **Directed Messages** — Workers can send messages to specific peers' inboxes. \
+Use `coupled_with` to identify tightly-coupled workers who should message each other.
+3. **Status Updates** — Workers self-report progress milestones so peers know \
+what stage they are at.
+
+### When to use coordination fields
+
+- `coordination_notes`: When one worker's findings would help another (e.g., API \
+schema, naming conventions). Not needed for simple, fully independent subtasks.
+- `coupled_with`: When two workers share an interface contract (e.g., one defines an \
+API, the other consumes it). List the other worker IDs.
+- `shared_interfaces`: When coupled, describe the shared contracts (e.g., "User API \
+response schema", "event payload format").
 
 ## Output
 
@@ -57,7 +65,9 @@ Respond with a JSON object matching this schema:
       "description": "detailed instructions",
       "target_files": ["path/to/file.py"],
       "acceptance_criteria": ["criterion 1", "criterion 2"],
-      "coordination_notes": "optional: what to write or read from shared notes"
+      "coordination_notes": "optional: what to write or read from shared notes",
+      "coupled_with": ["worker-2"],
+      "shared_interfaces": ["User API response schema"]
     }}
   ],
   "integration_notes": "how the pieces fit together",
@@ -155,6 +165,102 @@ Use the Read tool to check for notes from other workers. Files are named `<worke
 WORKER_COORDINATION_INSTRUCTIONS = """
 ## Coordination Instructions
 {coordination_instructions}
+"""
+
+WORKER_COORDINATION_SECTION = """
+
+## Coordination (Inter-Worker Communication)
+
+A shared coordination directory is available with three channels for coordinating \
+with other workers.
+
+**Coordination directory**: {coordination_dir_path}
+
+### 1. Shared Notes
+
+Write your findings for other workers to read.
+
+**Your note file**: {coordination_dir_path}/notes/{worker_id}.json
+
+Use the Write tool to create your note file as JSON:
+
+```json
+{{
+  "worker_id": "{worker_id}",
+  "timestamp": "<ISO 8601 timestamp>",
+  "topic": "<short label, e.g. api-schema>",
+  "content": "<your findings>",
+  "tags": ["optional", "tags"]
+}}
+```
+
+Read other workers' notes from `{coordination_dir_path}/notes/<worker_id>.json`.
+
+### 2. Directed Messages
+
+Send messages to specific workers via their inbox.
+
+**Your inbox**: {coordination_dir_path}/messages/{worker_id}/
+
+To send a message, write a JSON file to the recipient's inbox:
+
+**Path**: `{coordination_dir_path}/messages/<recipient_id>/NNN-from-{worker_id}.json`
+
+(Use a 3-digit sequence number like 001, 002, etc.)
+
+```json
+{{
+  "from_worker": "{worker_id}",
+  "to_worker": "<recipient_id>",
+  "timestamp": "<ISO 8601 timestamp>",
+  "topic": "<short label>",
+  "content": "<your message>",
+  "message_type": "info"
+}}
+```
+
+Message types: `info`, `question`, `decision`, `blocker`
+
+Check your inbox by reading files in `{coordination_dir_path}/messages/{worker_id}/`.
+
+### 3. Status Updates
+
+Report your progress so other workers can see where you are.
+
+**Your status file**: {coordination_dir_path}/status/{worker_id}.json
+
+```json
+{{
+  "worker_id": "{worker_id}",
+  "timestamp": "<ISO 8601 timestamp>",
+  "status": "in-progress",
+  "milestone": "<what you just completed>",
+  "details": "<optional extra context>"
+}}
+```
+
+Status values: `starting`, `in-progress`, `milestone-reached`, `blocked`, `done`
+
+### When to Check Your Inbox
+
+- After completing a milestone
+- Before making decisions about shared interfaces
+- Periodically if you are tightly coupled with other workers
+"""
+
+WORKER_COUPLING_SECTION = """
+## Coupled Workers
+
+You are tightly coupled with the following workers: {coupled_workers}
+
+Shared interface contracts: {shared_interfaces}
+
+### Coupling Guidelines
+
+- Message your coupled peers early about your approach to shared interfaces
+- Check your inbox before finalizing any shared interface decisions
+- If you reach a milestone on a shared interface, send a `decision` message to coupled peers
+- If you are blocked on a shared interface, send a `blocker` message
 """
 
 CONFLICT_RESOLVER_SYSTEM_PROMPT = """\

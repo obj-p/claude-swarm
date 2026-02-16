@@ -17,7 +17,8 @@ src/claude_swarm/
   session.py          — JSONL event logging + cost tracking
   state.py            — Persistent state management (StateManager + Pydantic state models)
   models.py           — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, IssueConfig, RunStatus, WorkerStatus, OversightLevel
-  notes.py            — Shared notes for inter-worker coordination (NoteManager + SharedNote model)
+  coordination.py     — Inter-worker coordination: CoordinationManager + SharedNote, Message, WorkerPeerStatus models (notes, messaging, status)
+  notes.py            — Backward-compat shim re-exporting NoteManager (alias for CoordinationManager) and SharedNote from coordination.py
   prompts.py          — System prompts for planner, worker, reviewer agents
   util.py             — run_agent() helper (consumes SDK async stream)
   errors.py           — Error hierarchy (SwarmError, GitHubError base)
@@ -47,7 +48,7 @@ uv run swarm resume --repo .              # resume last interrupted run
 - **Session recording** — events → `.claude-swarm/logs/<run_id>/events.jsonl`, summary → `metadata.json`
 - **Cost tracking** — per-worker and total, accumulated in SessionRecorder
 - **Worker retry** — `spawn_worker_with_retry()` retries failed workers with error context; escalates model (Sonnet → Opus) on final attempt
-- **Shared notes** — workers write/read JSON notes in `.claude-swarm/notes/<run_id>/`; one file per worker (`<worker_id>.json`); NoteManager validates on read with graceful fallback
+- **Coordination** — workers coordinate via `.claude-swarm/coordination/<run_id>/` with three channels: notes (`notes/<worker_id>.json`), directed messages (`messages/<worker_id>/NNN-from-<sender>.json`), and peer status (`status/<worker_id>.json`); CoordinationManager validates on read with graceful fallback; `notes.py` re-exports `CoordinationManager` as `NoteManager` for backward compat
 - **Conflict resolution** — on merge conflict, spawns a resolver agent to fix conflict markers before falling back to `MergeConflictError`
 - **SDK usage** — `claude_agent_sdk.query()` returns `AsyncIterator[Message]`; `run_agent()` consumes stream, returns `ResultMessage`
 - **State persistence** — `StateManager` writes `.claude-swarm/state.json` (atomic via `os.replace`); tracks run/worker lifecycle for `status` and `resume` commands

@@ -45,6 +45,8 @@ class WorkerTask(BaseModel):
     target_files: list[str] = Field(default_factory=list, description="Files this worker will likely modify")
     acceptance_criteria: list[str] = Field(default_factory=list, description="Conditions for this subtask to be considered complete")
     coordination_notes: str = Field(default="", description="Instructions for what this worker should write to or read from shared notes")
+    coupled_with: list[str] = Field(default_factory=list, description="Worker IDs this task is tightly coupled with")
+    shared_interfaces: list[str] = Field(default_factory=list, description="Shared interface contracts with coupled workers")
 
 
 class TaskPlan(BaseModel):

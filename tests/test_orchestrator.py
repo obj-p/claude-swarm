@@ -11,7 +11,6 @@ import pytest
 from claude_swarm.config import SwarmConfig
 from claude_swarm.errors import PlanningError
 from claude_swarm.models import RunStatus, TaskPlan, WorkerResult, WorkerTask
-from claude_swarm.notes import NoteManager
 from claude_swarm.orchestrator import Orchestrator
 from claude_swarm.state import StateManager
 
@@ -174,6 +173,11 @@ class TestNotesIntegration:
             assert "notes_dir" in kwargs
             assert kwargs["notes_dir"] is not None
             assert kwargs["notes_dir"].exists()
+            # Verify coordination_dir was passed with full layout
+            assert "coordination_dir" in kwargs
+            assert kwargs["coordination_dir"] is not None
+            assert (kwargs["coordination_dir"] / "messages").is_dir()
+            assert (kwargs["coordination_dir"] / "status").is_dir()
             return WorkerResult(
                 worker_id=task.worker_id, success=True,
                 cost_usd=0.01, duration_ms=100, summary="ok",

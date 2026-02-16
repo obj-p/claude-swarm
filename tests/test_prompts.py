@@ -5,6 +5,8 @@ from claude_swarm.prompts import (
     PLANNER_SYSTEM_PROMPT,
     REVIEWER_SYSTEM_PROMPT,
     WORKER_COORDINATION_INSTRUCTIONS,
+    WORKER_COORDINATION_SECTION,
+    WORKER_COUPLING_SECTION,
     WORKER_NOTES_SECTION,
     WORKER_RETRY_CONTEXT,
     WORKER_SYSTEM_PROMPT,
@@ -87,10 +89,18 @@ def test_notes_section_preserves_json_braces():
     assert "{{" not in result  # No double-braces in output
 
 
-def test_planner_includes_notes_guidance():
+def test_planner_includes_coordination_guidance():
     result = PLANNER_SYSTEM_PROMPT.format(max_workers=4)
     assert "coordination_notes" in result
+    assert "Coordination" in result
+    assert "coupled_with" in result
+    assert "shared_interfaces" in result
+
+
+def test_planner_includes_shared_notes_in_coordination():
+    result = PLANNER_SYSTEM_PROMPT.format(max_workers=4)
     assert "Shared Notes" in result
+    assert "Directed Messages" in result
 
 
 def test_worker_coordination_instructions_format():
@@ -99,3 +109,45 @@ def test_worker_coordination_instructions_format():
     )
     assert "Write a note about the API schema" in result
     assert "Coordination Instructions" in result
+
+
+def test_worker_coordination_section_format():
+    result = WORKER_COORDINATION_SECTION.format(
+        coordination_dir_path="/tmp/coordination",
+        worker_id="w1",
+    )
+    assert "/tmp/coordination" in result
+    assert "w1" in result
+    assert "Shared Notes" in result
+    assert "Directed Messages" in result
+    assert "Status Updates" in result
+    assert "message_type" in result
+
+
+def test_coordination_section_preserves_json_braces():
+    result = WORKER_COORDINATION_SECTION.format(
+        coordination_dir_path="/tmp/coordination",
+        worker_id="w1",
+    )
+    assert '"worker_id"' in result
+    assert "{{" not in result
+
+
+def test_worker_coupling_section_format():
+    result = WORKER_COUPLING_SECTION.format(
+        coupled_workers="w2, w3",
+        shared_interfaces="User API schema, event payload",
+    )
+    assert "w2, w3" in result
+    assert "User API schema" in result
+    assert "Coupled Workers" in result
+
+
+def test_coupling_section_no_extra_placeholders():
+    import re
+    result = WORKER_COUPLING_SECTION.format(
+        coupled_workers="w2",
+        shared_interfaces="API schema",
+    )
+    remaining = re.findall(r"\{[a-z_]+\}", result)
+    assert remaining == []

@@ -19,6 +19,46 @@ class TestWorkerTask:
         t = WorkerTask(worker_id="w1", title="Do thing", description="Details")
         assert t.coordination_notes == ""
 
+    def test_coupled_with_default(self):
+        t = WorkerTask(worker_id="w1", title="Do thing", description="Details")
+        assert t.coupled_with == []
+
+    def test_shared_interfaces_default(self):
+        t = WorkerTask(worker_id="w1", title="Do thing", description="Details")
+        assert t.shared_interfaces == []
+
+    def test_coupled_with_values(self):
+        t = WorkerTask(
+            worker_id="w1",
+            title="Title",
+            description="Desc",
+            coupled_with=["w2", "w3"],
+        )
+        assert t.coupled_with == ["w2", "w3"]
+
+    def test_shared_interfaces_values(self):
+        t = WorkerTask(
+            worker_id="w1",
+            title="Title",
+            description="Desc",
+            coupled_with=["w2"],
+            shared_interfaces=["User API schema", "event payload"],
+        )
+        assert t.shared_interfaces == ["User API schema", "event payload"]
+
+    def test_coupled_roundtrip(self):
+        t = WorkerTask(
+            worker_id="w1",
+            title="Title",
+            description="Desc",
+            coupled_with=["w2"],
+            shared_interfaces=["API schema"],
+        )
+        json_str = t.model_dump_json()
+        t2 = WorkerTask.model_validate_json(json_str)
+        assert t2.coupled_with == ["w2"]
+        assert t2.shared_interfaces == ["API schema"]
+
     def test_full(self):
         t = WorkerTask(
             worker_id="w1",

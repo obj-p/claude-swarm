@@ -13,6 +13,8 @@ from claude_swarm.guards import swarm_can_use_tool
 from claude_swarm.models import WorkerResult, WorkerTask
 from claude_swarm.prompts import (
     WORKER_COORDINATION_INSTRUCTIONS,
+    WORKER_COORDINATION_SECTION,
+    WORKER_COUPLING_SECTION,
     WORKER_NOTES_SECTION,
     WORKER_RETRY_CONTEXT,
     WORKER_SYSTEM_PROMPT,
@@ -31,6 +33,7 @@ async def _spawn_single_attempt(
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
     notes_dir: Path | None = None,
+    coordination_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a single Claude Code worker attempt in an isolated worktree."""
     start = time.monotonic()
@@ -41,15 +44,32 @@ async def _spawn_single_attempt(
         acceptance_criteria="\n".join(f"- {c}" for c in task.acceptance_criteria) if task.acceptance_criteria else "Complete the task as described.",
     )
 
-    if notes_dir is not None:
+    # Select coordination prompt based on directory layout
+    if coordination_dir is not None and (coordination_dir / "messages").is_dir():
+        # New coordination layout with messages/status support
+        system_prompt += WORKER_COORDINATION_SECTION.format(
+            coordination_dir_path=coordination_dir,
+            worker_id=task.worker_id,
+        )
+    elif notes_dir is not None:
+        # Legacy notes-only layout
         system_prompt += WORKER_NOTES_SECTION.format(
             notes_dir_path=notes_dir,
             worker_id=task.worker_id,
         )
-        if task.coordination_notes:
-            system_prompt += WORKER_COORDINATION_INSTRUCTIONS.format(
-                coordination_instructions=task.coordination_notes,
-            )
+
+    # Append coupling section if worker has coupled peers
+    if task.coupled_with:
+        system_prompt += WORKER_COUPLING_SECTION.format(
+            coupled_workers=", ".join(task.coupled_with),
+            shared_interfaces=", ".join(task.shared_interfaces) if task.shared_interfaces else "none specified",
+        )
+
+    # Append coordination instructions if present
+    if task.coordination_notes:
+        system_prompt += WORKER_COORDINATION_INSTRUCTIONS.format(
+            coordination_instructions=task.coordination_notes,
+        )
 
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
@@ -105,6 +125,7 @@ async def spawn_worker_with_retry(
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
     notes_dir: Path | None = None,
+    coordination_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a worker with retry and optional model escalation.
 
@@ -131,6 +152,7 @@ async def spawn_worker_with_retry(
             max_budget_usd=max_budget_usd,
             max_turns=max_turns,
             notes_dir=notes_dir,
+            coordination_dir=coordination_dir,
         )
         result.attempt = attempt
         result.model_used = current_model
@@ -150,6 +172,7 @@ async def spawn_worker(
     max_budget_usd: float = 5.0,
     max_turns: int = 50,
     notes_dir: Path | None = None,
+    coordination_dir: Path | None = None,
 ) -> WorkerResult:
     """Spawn a Claude Code worker agent in an isolated worktree.
 
@@ -162,4 +185,5 @@ async def spawn_worker(
         max_budget_usd=max_budget_usd,
         max_turns=max_turns,
         notes_dir=notes_dir,
+        coordination_dir=coordination_dir,
     )
