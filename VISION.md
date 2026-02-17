@@ -184,10 +184,10 @@ These questions were explored during development. See DESIGN_DECISIONS.md for de
 - **Error Recovery** — Tiered: retry with error context, model escalation (Sonnet -> Opus), cost circuit breaker. `spawn_worker_with_retry()` implements the retry/escalation loop.
 - **Model Selection** — Opus orchestrator, Sonnet default workers, Opus escalation on failure. Configurable via `--model` flag.
 - **Security Boundaries** — Defense in depth: worktree isolation, `swarm_can_use_tool` guard function (10+ blocked categories), cost circuit breaker, configurable oversight levels.
+- **Real-time dashboard** — `SwarmDashboard` (Rich Live) with `--live/--no-live` flag on `run` and `resume`. Polls `state.json`, coordination status, and `events.jsonl` at 1 Hz. Auto-detected from TTY.
 
 ### Open
 
-- **Real-time dashboard** — Terminal UI for live worker monitoring (mockup in DESIGN_DECISIONS.md Section 4). Worker peer status files already provide the data source; needs a Rich Live/Layout renderer or TUI.
 - **Multi-repo support** — Workers currently operate within a single repo's worktrees.
 - **Environment isolation** — Dev containers per worktree for full port/database isolation.
 - **Webhook/CI intake** — Tasks currently enter via CLI or GitHub Issues only.
@@ -223,7 +223,7 @@ These questions were explored during development. See DESIGN_DECISIONS.md for de
 - [ ] CI/CD integration
 
 ### Phase 4: Observability & Optimization
-- [ ] Real-time agent monitoring dashboard (terminal UI)
+- [x] Real-time agent monitoring dashboard (`dashboard.py` — Rich Live terminal UI with `--live/--no-live`)
 - [x] Cost tracking per worker and per task (`session.py`, cost circuit breaker)
 - [x] Model escalation on failure (Sonnet -> Opus in `spawn_worker_with_retry`)
 - [ ] Performance metrics and benchmarking
