@@ -115,10 +115,11 @@ Future: Full environment isolation (ports, databases, services) via dev containe
 
 #### 5. Coordination Bus
 Agents coordinate through multiple channels depending on the task:
-- **Task list** (shared state): What needs doing, who's doing what, what's done
-- **Direct messaging** (Agent Teams): When agents need to share findings or resolve conflicts
+- **Shared notes** (filesystem): Workers broadcast findings via `notes/<worker_id>.json`
+- **Directed messages** (filesystem): Workers send messages to specific peers via per-worker inboxes (`messages/<recipient>/NNN-from-<sender>.json`)
+- **Peer status** (filesystem): Workers self-report progress milestones via `status/<worker_id>.json`
 - **Git** (branches + PRs): The source of truth for code changes
-- **Filesystem** (shared notes/artifacts): Intermediate results agents can read
+- **Coupling metadata** (planner): `coupled_with` and `shared_interfaces` fields on tasks trigger coordination prompts
 
 #### 6. Oversight Controller
 Configurable per-task human-in-the-loop:
@@ -171,38 +172,25 @@ The swarm handles the full development lifecycle:
 3. Validates by running the test suite
 4. Opens PR with improvements
 
-## Design Questions (Open)
+## Design Questions
 
-These are decisions we're actively exploring:
+These questions were explored during development. See DESIGN_DECISIONS.md for detailed analysis and rationale.
 
-### Coordination Depth
-- When should the orchestrator use Agent Teams (peer messaging) vs. simple subagent delegation (fire-and-forget)?
-- Should workers be able to spawn their own sub-workers? (Currently Claude Code prevents nested subagents)
+### Resolved
 
-### Conflict Resolution
-- When two workers edit overlapping areas, how does the orchestrator resolve conflicts?
-- Should we prevent overlap proactively (strict file boundaries) or handle it reactively (merge conflict resolution)?
+- **Coordination Depth** — Adaptive: filesystem-based coordination via shared notes, directed messages, and peer status. No Agent Teams dependency. Coupling metadata on tasks triggers coordination prompts.
+- **Conflict Resolution** — Overlap + merge: full parallel execution, integration agent resolves git conflicts reactively, semantic review catches interface mismatches.
+- **State Persistence** — GitHub-native (issues + branches + PRs) with local `.claude-swarm/state.json` cache. `swarm resume` re-executes failed/pending workers from saved plan.
+- **Error Recovery** — Tiered: retry with error context, model escalation (Sonnet -> Opus), cost circuit breaker. `spawn_worker_with_retry()` implements the retry/escalation loop.
+- **Model Selection** — Opus orchestrator, Sonnet default workers, Opus escalation on failure. Configurable via `--model` flag.
+- **Security Boundaries** — Defense in depth: worktree isolation, `swarm_can_use_tool` guard function (10+ blocked categories), cost circuit breaker, configurable oversight levels.
 
-### State Persistence
-- How do long-running tasks survive across session boundaries?
-- Should the swarm maintain a persistent task database or rely on git/GitHub as the source of truth?
+### Open
 
-### Observability
-- What does the dashboard/monitoring look like?
-- How do you inspect what each agent is doing in real-time?
-- How do you measure token spend and cost per task?
-
-### Error Recovery
-- When a worker fails or produces bad output, how does the orchestrator handle it?
-- Retry with more context? Reassign to a different worker? Escalate to human?
-
-### Model Selection
-- Should workers always use the same model, or should the orchestrator pick models based on task complexity?
-- Opus for complex architectural decisions, Sonnet for routine implementation, Haiku for simple edits?
-
-### Security Boundaries
-- How do we prevent agents from making destructive changes (force pushes, dropping databases)?
-- How do we handle secrets and credentials across the agent pool?
+- **Real-time dashboard** — Terminal UI for live worker monitoring (mockup in DESIGN_DECISIONS.md Section 4). Worker peer status files already provide the data source; needs a Rich Live/Layout renderer or TUI.
+- **Multi-repo support** — Workers currently operate within a single repo's worktrees.
+- **Environment isolation** — Dev containers per worktree for full port/database isolation.
+- **Webhook/CI intake** — Tasks currently enter via CLI or GitHub Issues only.
 
 ## Prior Art & Inspiration
 
@@ -216,28 +204,28 @@ These are decisions we're actively exploring:
 ## Roadmap
 
 ### Phase 1: Foundation
-- [ ] CLI interface for the orchestrator
-- [ ] Discovery phase implementation
-- [ ] Git worktree isolation for workers
-- [ ] Basic orchestrator-worker pattern (spawn N agents, collect results)
-- [ ] Single-repo support
+- [x] CLI interface for the orchestrator (`cli.py` — run, plan, cleanup, status, resume)
+- [x] Discovery phase implementation (planner agent reads repo structure)
+- [x] Git worktree isolation for workers (`worktree.py`)
+- [x] Basic orchestrator-worker pattern (`orchestrator.py` — plan, execute, integrate)
+- [x] Single-repo support
 
 ### Phase 2: Coordination
-- [ ] Agent Teams integration for peer communication
-- [ ] Shared task list management
-- [ ] Conflict detection and resolution
-- [ ] Configurable oversight levels
+- [x] Inter-worker coordination (`coordination.py` — notes, directed messages, peer status)
+- [x] Worker coupling metadata (`coupled_with`, `shared_interfaces` on `WorkerTask`)
+- [x] Conflict detection and resolution (`integrator.py` — merge + conflict resolver agent)
+- [x] Configurable oversight levels (`autonomous`, `pr-gated`, `checkpoint`)
 
 ### Phase 3: Intake & Automation
-- [ ] GitHub Issue intake (watch for labeled issues)
+- [x] GitHub Issue intake (`issue_processor.py` — `swarm process` + `swarm watch`)
 - [ ] Webhook support
 - [ ] Scheduled/recurring tasks
 - [ ] CI/CD integration
 
 ### Phase 4: Observability & Optimization
-- [ ] Real-time agent monitoring dashboard
-- [ ] Token spend tracking per task
-- [ ] Cost optimization (adaptive model selection)
+- [ ] Real-time agent monitoring dashboard (terminal UI)
+- [x] Cost tracking per worker and per task (`session.py`, cost circuit breaker)
+- [x] Model escalation on failure (Sonnet -> Opus in `spawn_worker_with_retry`)
 - [ ] Performance metrics and benchmarking
 
 ### Phase 5: Advanced Patterns

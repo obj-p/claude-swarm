@@ -27,9 +27,9 @@ Deep dives into each open design question from the vision document. Each section
 - Would enable hierarchical decomposition (orchestrator -> team leads -> workers)
 - Risk: coordination tax grows exponentially with depth
 
-### Decision: Adaptive Selection
+### Decision: Filesystem-Based Coordination (Adaptive)
 
-The orchestrator chooses the coordination mode during task decomposition based on **coupling analysis**:
+Rather than introducing a separate execution mode (Agent Teams), all coordination happens through filesystem conventions. Workers remain subagents with Read/Write tool access to a shared coordination directory. The orchestrator selects the coordination depth during task decomposition based on **coupling analysis**:
 
 ```
 Task Decomposition
@@ -38,22 +38,48 @@ Task Decomposition
   Coupling Analysis
        |
        +-- Independent tasks --> Subagent Delegation
-       |   (no shared files,      (fire-and-forget)
+       |   (no shared files,      (fire-and-forget, no coordination fields)
        |    no shared state)
        |
-       +-- Loosely coupled -----> Subagent Delegation + Shared Notes
-       |   (read same files,      (workers write to shared artifacts
-       |    write different)       directory that others can read)
+       +-- Loosely coupled -----> Shared Notes
+       |   (read same files,      (coordination_notes field instructs workers
+       |    write different)       what to write/read in notes/)
        |
-       +-- Tightly coupled -----> Agent Teams
-           (shared interfaces,    (full peer messaging +
-            API contracts,         shared task list)
-            coordinated state)
+       +-- Tightly coupled -----> Directed Messaging + Coupling
+           (shared interfaces,    (coupled_with + shared_interfaces fields;
+            API contracts,         workers use messages/ inboxes and
+            coordinated state)     check peers before finalizing decisions)
 ```
 
 **No nested subagents.** The orchestrator is the sole spawner. This keeps the coordination graph flat and predictable. If a task is complex enough to need hierarchy, the orchestrator breaks it into more granular subtasks rather than delegating decomposition to workers.
 
-**Shared notes pattern** for loose coupling: Workers write intermediate findings to a shared `.claude-swarm/notes/` directory in the repo. Other workers can read these files for context without direct messaging overhead. This is a lightweight coordination channel that costs zero extra tokens.
+#### Coordination directory layout
+
+```
+.claude-swarm/coordination/<run_id>/
+    notes/                          — one JSON file per worker (<worker_id>.json)
+    messages/                       — per-worker inbox directories
+        <worker_id>/
+            NNN-from-<sender>.json  — directed messages between workers
+    status/                         — self-reported progress
+        <worker_id>.json            — worker's current status + milestone
+```
+
+Three channels, all via Read/Write tools workers already have:
+
+1. **Shared Notes** — broadcast findings. Worker writes `notes/<worker_id>.json`. Others read it.
+2. **Directed Messages** — point-to-point. Worker writes `messages/<recipient>/NNN-from-<sender>.json`. Message types: `info`, `question`, `decision`, `blocker`.
+3. **Peer Status** — self-reported progress. Worker writes `status/<worker_id>.json` with status (`starting`, `in-progress`, `milestone-reached`, `blocked`, `done`).
+
+**Why filesystem over Agent Teams?** Workers already run as subagents with file tools. Filesystem coordination adds zero new dependencies, requires no new execution mode, and is fully observable (you can `cat` the coordination directory to see what workers told each other). The `CoordinationManager` validates files on read with graceful fallback for malformed JSON.
+
+#### WorkerTask coupling fields
+
+The planner can mark tightly-coupled workers via two fields on `WorkerTask`:
+- `coupled_with: list[str]` — peer worker IDs that share interfaces
+- `shared_interfaces: list[str]` — descriptions of the shared contracts
+
+When these are set, the worker's system prompt includes a coupling section instructing it to message peers early about approach, check its inbox before finalizing shared decisions, and send `decision`/`blocker` messages at interface milestones.
 
 ---
 
@@ -224,27 +250,31 @@ Add JWT-based authentication to the API...
 #### Channel 1: Terminal (Real-Time)
 For active monitoring while the swarm runs.
 
+**Current implementation:** Rich console output with per-worker status lines during execution and a summary table at completion (`orchestrator.py:_print_summary`). Workers report done/failed/skipped status with cost and duration as they complete.
+
+**Future (not yet implemented):** Interactive terminal dashboard with live-updating worker panels:
+
 ```
 +----------------------------------------------------------+
 | claude-swarm: Implement user authentication               |
-| Status: RUNNING | Workers: 3/3 active | Tokens: 142.3k   |
+| Status: RUNNING | Workers: 3/3 active | Cost: $0.42      |
 +----------------------------------------------------------+
 |                                                          |
 |  +- Worker 1 (auth-middleware) ----------------------+   |
 |  | Status: Writing code                              |   |
 |  | Files: src/middleware/auth.ts, src/types/auth.ts   |   |
-|  | Tokens: 48.2k | Elapsed: 2m 14s                   |   |
+|  | Cost: $0.15 | Elapsed: 2m 14s                     |   |
 |  +---------------------------------------------------+   |
 |                                                          |
 |  +- Worker 2 (auth-endpoints) -----------------------+   |
 |  | Status: Running tests                             |   |
 |  | Files: src/routes/auth.ts, src/controllers/auth.ts|   |
-|  | Tokens: 52.1k | Elapsed: 2m 31s                   |   |
+|  | Cost: $0.18 | Elapsed: 2m 31s                     |   |
 |  +---------------------------------------------------+   |
 |                                                          |
 |  +- Worker 3 (auth-tests) ---------------------------+   |
 |  | Status: Waiting (blocked by workers 1,2)          |   |
-|  | Tokens: 0 | Elapsed: --                           |   |
+|  | Cost: $0.00 | Elapsed: --                         |   |
 |  +---------------------------------------------------+   |
 |                                                          |
 |  [q]uit  [p]ause  [d]etail <worker#>  [l]ogs            |
@@ -253,7 +283,7 @@ For active monitoring while the swarm runs.
 +----------------------------------------------------------+
 ```
 
-Implementation: tmux session managed by the orchestrator. Each worker runs in a pane. The orchestrator renders a status header. This builds on Agent Teams' existing tmux integration.
+Could be built with Rich Live/Layout or a separate TUI process. The worker peer status files (`.claude-swarm/coordination/<run_id>/status/`) already provide the data source -- the orchestrator would poll these for real-time updates.
 
 #### Channel 2: GitHub (Async / Historical)
 For reviewing progress after the fact or from a different machine.
@@ -548,7 +578,7 @@ Sometimes you legitimately need to do something the guard blocks. Options:
 
 | Question | Decision | Rationale |
 |----------|----------|-----------|
-| Coordination | Adaptive: subagent delegation by default, Agent Teams for coupled tasks | Minimize coordination tax; escalate only when needed |
+| Coordination | Adaptive: subagent delegation by default, filesystem-based messaging for coupled tasks | Minimize coordination tax; zero new dependencies for inter-worker communication |
 | Conflict Resolution | **Overlap + merge**: full parallel execution, integration agent resolves conflicts after | Speed-first: maximize parallelism, handle conflicts reactively |
 | State Persistence | GitHub-native (issues + branches + PRs) with local cache | No new infrastructure; human-readable; survives crashes |
 | Observability | Three channels: terminal (real-time), GitHub (async), local logs (debug) | Different needs at different times |
