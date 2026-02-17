@@ -18,6 +18,7 @@ src/claude_swarm/
   state.py            — Persistent state management (StateManager + Pydantic state models)
   models.py           — Pydantic models: TaskPlan, WorkerTask, WorkerResult, SwarmResult, IssueConfig, RunStatus, WorkerStatus, OversightLevel
   coordination.py     — Inter-worker coordination: CoordinationManager + SharedNote, Message, WorkerPeerStatus models (notes, messaging, status)
+  dashboard.py        — Real-time terminal dashboard (SwarmDashboard renderable, Rich Live integration)
   notes.py            — Backward-compat shim re-exporting NoteManager (alias for CoordinationManager) and SharedNote from coordination.py
   prompts.py          — System prompts for planner, worker, reviewer agents
   util.py             — run_agent() helper (consumes SDK async stream)
@@ -33,9 +34,12 @@ uv run swarm run "task" --repo . --oversight checkpoint   # pause at key decisio
 uv run swarm plan "task" --repo .          # dry-run, plan only
 uv run swarm process --issue 42 --repo .  # process a single GitHub issue
 uv run swarm watch --repo . --interval 30 # poll for issues labeled 'swarm'
+uv run swarm run "task" --repo . --live      # run with live dashboard (default when TTY)
+uv run swarm run "task" --repo . --no-live   # disable live dashboard
 uv run swarm cleanup --repo .             # remove all worktrees + branches
 uv run swarm status --repo .              # show current/recent run state
 uv run swarm resume --repo .              # resume last interrupted run
+uv run swarm resume --repo . --live       # resume with live dashboard
 ```
 
 ## Key Patterns
@@ -55,6 +59,7 @@ uv run swarm resume --repo .              # resume last interrupted run
 - **State file** — `.claude-swarm/state.json` (gitignored); contains `SwarmState` with `active_run` pointer and per-run `RunState`/`WorkerState`
 - **Resumption** — `swarm resume` detects incomplete workers via `WorkerStatus`, re-executes only pending/failed workers using the saved plan
 - **Oversight levels** — `--oversight autonomous|pr-gated|checkpoint`; autonomous auto-merges via `gh pr merge --auto --squash`; checkpoint pauses at 3 decision points (execute workers, integrate, create PR) with terminal confirmation; pr-gated (default) creates PR for human merge
+- **Live dashboard** — `SwarmDashboard` implements `__rich__()` protocol; polls `state.json` + coordination status + events.jsonl; integrated into `_execute_workers()` via Rich `Live` with asyncio refresh task at 1Hz; `--live` auto-detected from TTY
 - **GitHub Issues intake** — `swarm process --issue N` (one-shot) and `swarm watch` (poll loop); label state machine: `swarm` → `swarm:active` → `swarm:done`/`swarm:failed`; `issue_number` threads through to PR body as `Closes #N`
 
 ## Development

@@ -21,6 +21,7 @@ class SessionRecorder:
         self.log_dir = repo_path / ".claude-swarm" / "logs" / run_id
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self._events_path = self.log_dir / "events.jsonl"
+        self.events_path = self._events_path
         self._start_time = time.monotonic()
         self._worker_costs: dict[str, float] = {}
         self._total_cost: float = 0.0

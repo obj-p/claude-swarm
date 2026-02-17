@@ -33,10 +33,11 @@ console = Console()
 class Orchestrator:
     """Manages the full swarm pipeline: plan, execute, integrate."""
 
-    def __init__(self, config: SwarmConfig, *, run_id: str | None = None) -> None:
+    def __init__(self, config: SwarmConfig, *, run_id: str | None = None, live: bool = False) -> None:
         self.config = config
         self.run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         self.config.run_id = self.run_id
+        self.live_mode = live
         self.worktree_mgr = WorktreeManager(config.repo_path, self.run_id)
         self.session = SessionRecorder(config.repo_path, self.run_id)
         self.state_mgr = StateManager(config.repo_path)
@@ -342,7 +343,8 @@ class Orchestrator:
             async with semaphore:
                 # Check INSIDE semaphore so we see updates from just-finished workers
                 if _cost_exceeded:
-                    console.print(f"  {task.worker_id}: [yellow]skipped[/yellow] — cost limit exceeded")
+                    if not self.live_mode:
+                        console.print(f"  {task.worker_id}: [yellow]skipped[/yellow] — cost limit exceeded")
                     self.state_mgr.update_worker(
                         self.run_id, task.worker_id,
                         status=WorkerStatus.FAILED,
@@ -405,14 +407,16 @@ class Orchestrator:
                                 "Cost limit exceeded: $%.2f > $%.2f",
                                 _running_cost, self.config.max_cost,
                             )
-                            console.print(
-                                f"  [yellow]Cost limit reached (${_running_cost:.2f} > "
-                                f"${self.config.max_cost:.2f}). Remaining workers will be skipped.[/yellow]"
-                            )
+                            if not self.live_mode:
+                                console.print(
+                                    f"  [yellow]Cost limit reached (${_running_cost:.2f} > "
+                                    f"${self.config.max_cost:.2f}). Remaining workers will be skipped.[/yellow]"
+                                )
 
-                    status = "[green]done[/green]" if result.success else "[red]failed[/red]"
-                    cost_str = f" (${result.cost_usd:.2f})" if result.cost_usd is not None else ""
-                    console.print(f"  {task.worker_id}: {status}{cost_str} — {task.title}")
+                    if not self.live_mode:
+                        status = "[green]done[/green]" if result.success else "[red]failed[/red]"
+                        cost_str = f" (${result.cost_usd:.2f})" if result.cost_usd is not None else ""
+                        console.print(f"  {task.worker_id}: {status}{cost_str} — {task.title}")
                     return result
 
                 except Exception as e:
@@ -423,7 +427,8 @@ class Orchestrator:
                         error=str(e),
                         completed_at=self.state_mgr._now(),
                     )
-                    console.print(f"  {task.worker_id}: [red]error[/red] — {e}")
+                    if not self.live_mode:
+                        console.print(f"  {task.worker_id}: [red]error[/red] — {e}")
                     return WorkerResult(
                         worker_id=task.worker_id,
                         success=False,
@@ -436,7 +441,37 @@ class Orchestrator:
             for i, task in enumerate(plan.tasks)
         ]
 
-        results = await asyncio.gather(*coros, return_exceptions=True)
+        if self.live_mode and len(plan.tasks) > 0:
+            from rich.live import Live
+            from claude_swarm.dashboard import SwarmDashboard
+
+            dashboard = SwarmDashboard(
+                state_mgr=self.state_mgr,
+                run_id=self.run_id,
+                task=self.config.task,
+                coord_mgr=self.coord_mgr,
+                events_path=self.session.events_path,
+            )
+            with Live(dashboard, console=console, auto_refresh=False) as live_display:
+                async def _refresh():
+                    try:
+                        while True:
+                            live_display.refresh()
+                            await asyncio.sleep(1.0)
+                    except asyncio.CancelledError:
+                        pass
+
+                refresh_task = asyncio.create_task(_refresh())
+                try:
+                    results = await asyncio.gather(*coros, return_exceptions=True)
+                finally:
+                    refresh_task.cancel()
+                    try:
+                        await refresh_task
+                    except asyncio.CancelledError:
+                        pass
+        else:
+            results = await asyncio.gather(*coros, return_exceptions=True)
 
         # Convert exceptions to WorkerResults
         final_results: list[WorkerResult] = []

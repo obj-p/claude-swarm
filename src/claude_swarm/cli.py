@@ -41,6 +41,7 @@ def cli() -> None:
     default="pr-gated",
     help="Oversight level: autonomous (auto-merge), pr-gated (default), checkpoint (pause for approval)",
 )
+@click.option("--live/--no-live", default=None, help="Live dashboard (default: auto-detect TTY)")
 def run(
     task: str,
     repo: Path | None,
@@ -57,6 +58,7 @@ def run(
     no_escalation: bool,
     no_conflict_resolution: bool,
     oversight: str,
+    live: bool | None,
 ) -> None:
     """Run the full swarm pipeline: plan, execute, integrate, PR."""
     if oversight == "autonomous" and not pr:
@@ -80,9 +82,12 @@ def run(
         oversight=oversight,
     )
 
+    if live is None:
+        live = sys.stdout.isatty() and not dry_run
+
     from claude_swarm.orchestrator import Orchestrator
 
-    orchestrator = Orchestrator(config)
+    orchestrator = Orchestrator(config, live=live)
 
     async def _main() -> None:
         try:
@@ -331,7 +336,8 @@ def watch(
 @cli.command()
 @click.option("--repo", type=click.Path(exists=True, path_type=Path), default=None, help="Repository path (default: cwd)")
 @click.option("--run-id", type=str, default=None, help="Specific run to resume (default: last interrupted)")
-def resume(repo: Path | None, run_id: str | None) -> None:
+@click.option("--live/--no-live", default=None, help="Live dashboard (default: auto-detect TTY)")
+def resume(repo: Path | None, run_id: str | None, live: bool | None) -> None:
     """Resume an interrupted swarm run."""
     from claude_swarm.models import RunStatus, WorkerStatus
     from claude_swarm.state import StateManager
@@ -413,8 +419,11 @@ def resume(repo: Path | None, run_id: str | None) -> None:
         build_command=run.plan.build_command,
     )
 
+    if live is None:
+        live = sys.stdout.isatty()
+
     from claude_swarm.orchestrator import Orchestrator
-    orchestrator = Orchestrator(config, run_id=run.run_id)
+    orchestrator = Orchestrator(config, run_id=run.run_id, live=live)
 
     # Re-activate the run
     state_mgr.set_run_status(run.run_id, RunStatus.EXECUTING)
